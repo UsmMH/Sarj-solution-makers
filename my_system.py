@@ -11,12 +11,13 @@ Changes vs step 1 (everything else, including the TAKE_TURN path, is unchanged):
     python -m ttbench.play --calls all            # real-time run, ~10 min
 """
 import collections
+import os
 
 import numpy as np
 
 from ttbench.server import System, run
 
-TEAM = "my-team"            # your team name, shown on the scoreboard
+TEAM = "Team 4 (for now :D)"            # your team name, shown on the scoreboard
 
 FRAME_MS = 20               # each on_frame call covers 20 ms of audio
 LOUD_DB = -42               # absolute minimum for "sound" (the old fixed threshold)
@@ -29,7 +30,7 @@ FLOOR_PERCENTILE = 20       # low percentile of that window = the floor
 MARGIN_DB = 10              # caller must be this far above the floor to count as sound
 
 # --- Step 2a knobs -----------------------------------------------------------------------------------
-PEAK_DB = -18.0             # burst must reach this peak (dB) before it can trigger STOP
+PEAK_DB = -20.0             # burst must reach this peak (dB) before it can trigger STOP
 GAP_TOLERANCE_FRAMES = 2    # this many CONSECUTIVE quiet frames end a burst (2 = 40 ms)
 
 NO_PEAK = -120.0
