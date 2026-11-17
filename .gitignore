@@ -5,3 +5,7 @@ __pycache__/
 .pytest_cache/
 *-heard.wav
 .venv312/
+asr_log.txt
+asr_probe_*.txt
+asr_small_cpu.txt
+eval_rules_out.txt
