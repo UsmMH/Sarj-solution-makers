@@ -11,3 +11,4 @@ asr_small_cpu.txt
 eval_rules_out.txt
 # secrets
 .env
+data/aug/

@@ -54,7 +54,8 @@ ACKS = _words("""
 NEUTRAL = _words("يا و ثم")
 STOCK = re.compile(r"(?:^| )(?:ترجمه|اشترك\w*|المشاهده|مشاهده)(?: |$)")      # what Whisper invents on noise
 LAUGH = re.compile(r"(?:ه|ها)+")
-WEAK_EVIDENCE_MIN_DB = -20.0   # dev data: every real stop peaked at -18 or louder, every false one at -24 or quieter (a synthetic cue: re-check on new data)
+WEAK_EVIDENCE_MIN_DB = -20.0   # fallback only (no reference yet): absolute peak; fails when the whole line is quieter
+WEAK_EVIDENCE_REL_DB = -6.0    # peak vs the caller's own earlier voice: real stops -2..+6 dB, TV / echo / background -11..-18 dB
 MIN_CONTENT_WORDS = 3     # two odd words are what Whisper makes of noise («في بوح», «يوم ما»); three is real speech
 
 
@@ -122,12 +123,15 @@ def eot_incomplete(text: str):
     return False, "sounds finished"
 
 
-def decide(text: str, agent_text: str = "", peak_db=None):
+def decide(text: str, agent_text: str = "", peak_db=None, ref_db=None):
     """(stop?, reason). False means 'no reason to stop yet': a longer burst may still be decoded again.
 
     peak_db = loudest 20 ms of the burst (dBFS), if known. Only the weak paths (a question, or several unremarkable
     words) need it: a quiet burst that Whisper turned into «ماذا شعب؟» is far more likely TV, echo or someone else
     in the room than the caller. Stop cues are never gated.
+    ref_db = loudest 20 ms of the caller's own voice earlier in this call. With it, "quiet" means quieter than the
+    caller usually is, so a softer speaker or a quieter phone line no longer looks like TV. Without it, the old
+    absolute -20 dB line is used.
     """
     toks = tokens(text)
     norm = " ".join(toks)
@@ -142,7 +146,12 @@ def decide(text: str, agent_text: str = "", peak_db=None):
     cue = find_cue(toks)
     if cue:
         return True, f"cue «{cue}»"
-    quiet = peak_db is not None and peak_db < WEAK_EVIDENCE_MIN_DB
+    if peak_db is None:
+        quiet = False
+    elif ref_db is not None:
+        quiet = peak_db - ref_db < WEAK_EVIDENCE_REL_DB
+    else:
+        quiet = peak_db < WEAK_EVIDENCE_MIN_DB
     if len(toks) >= 2 and any(t in QUESTION_WORDS for t in toks):
         return (False, "question, but quiet") if quiet else (True, "question")
     content = list(dict.fromkeys(t for t in toks if t not in NEUTRAL and not is_ack(t)))   # distinct words

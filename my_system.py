@@ -134,6 +134,8 @@ class MySystem(System):
         self.agent_hist = []
         self.stopped = False
         self.hist = collections.deque(maxlen=FLOOR_WINDOW_MS // FRAME_MS)     # recent caller levels (dB)
+        self._ref_db = NO_PEAK                                   # caller's loudest 20 ms this call, outside bursts being judged
+        self._burst_ref = None
         # energy fallback (step 2a)
         self.sound_ms = 0
         self.gap = 0
@@ -166,6 +168,7 @@ class MySystem(System):
     def on_scenario_start(self, context=None):
         self.hist.clear()                                        # new call, possibly new noise
         self.agent_hist = []
+        self._ref_db = NO_PEAK                                   # new caller, new line: no reference voice yet
         self._log(f"--- scenario {context!r}"[:200])
         self._reset_burst()
 
@@ -193,6 +196,8 @@ class MySystem(System):
                 return None
             if ASR.ok and self._fails < 3:
                 self._track_burst(loud_stop)
+                if not self._in_burst:                         # a burst never sets its own reference
+                    self._ref_db = max(self._ref_db, db)
                 if self._stop_flag:
                     self.stopped = True
                     return "STOP"
@@ -200,6 +205,7 @@ class MySystem(System):
             return self._energy_stop(loud_stop, db)           # ASR missing or failing: step-2a behaviour
 
         smart = EOT_SMART and ASR.ok and self._fails < 3
+        self._ref_db = max(self._ref_db, db)                   # the agent is quiet: this is the caller's own turn
         if loud_eot:
             self.caller_spoke, self.quiet_ms = True, 0
             self._eot_id += 1                                  # any probe in flight is now out of date
@@ -267,6 +273,7 @@ class MySystem(System):
                     self._in_burst = True
                     self._burst_start = self._n - FRAME_SAMPLES
                     self._last_req_end = 0
+                    self._burst_ref = self._ref_db if self._ref_db > LOUD_DB else None   # no voice heard yet: absolute gate
         elif self._in_burst:
             self._quiet += FRAME_MS
             if self._quiet >= HANG_MS:                         # burst over: one last look at all of it
@@ -281,7 +288,8 @@ class MySystem(System):
 
     def _request(self):
         with self._lock:
-            self._req = (self._epoch, self._burst_id, self._burst_start, self._n, " ".join(self.agent_hist))
+            self._req = (self._epoch, self._burst_id, self._burst_start, self._n, " ".join(self.agent_hist),
+                         self._burst_ref)
             self._last_req_end = self._n
         self._wake.set()
 
@@ -345,7 +353,7 @@ class MySystem(System):
                 self._do_eot(ereq)
             if req is None:
                 continue
-            epoch, burst_id, start, end, agent_text = req
+            epoch, burst_id, start, end, agent_text, ref = req
             audio = self._snapshot(start, end)
             if audio is None:
                 continue
@@ -360,8 +368,10 @@ class MySystem(System):
                 continue
             fr = audio[: len(audio) // FRAME_SAMPLES * FRAME_SAMPLES].reshape(-1, FRAME_SAMPLES)
             pk = 20 * np.log10(np.sqrt((fr.astype(np.float64) ** 2).mean(axis=1)).max() + 1e-12) if len(fr) else -99.0
-            stop, why = decide(text, agent_text, peak_db=float(pk))
-            line = (f"[asr] burst {burst_id} {len(audio) / SR:.1f}s ({ms:.0f} ms, lp {logprob:.2f}, pk {pk:.0f} dB): {text!r} -> "
+            stop, why = decide(text, agent_text, peak_db=float(pk), ref_db=ref)
+            rel = f"{pk - ref:+.0f}" if ref is not None else "n/a"
+            line = (f"[asr] burst {burst_id} {len(audio) / SR:.1f}s ({ms:.0f} ms, lp {logprob:.2f}, pk {pk:.0f} dB, "
+                    f"vs caller {rel} dB): {text!r} -> "
                     f"{'STOP' if stop else 'keep'} ({why})")
             print(line, flush=True)
             self._log(line)
