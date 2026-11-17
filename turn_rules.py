@@ -42,6 +42,18 @@ STOP_CUES = _words("""
     اسمع اسمعني اسمعي اسمعيني بس عفوا سوري sorry wait stop pardon
 """)
 PREFIX_CUES = ("لحظ", "استن")            # a word still being said: «لحظ…», «استن…»
+# Multi-word floor bids from general Saudi / Gulf phone speech (added Nov 18, NOT taken from the dev transcripts;
+# «ما طلبت» and «ما يناسبني» also occur in two dev STOP calls that already stop on other cues). Phrases, not single
+# words: «فاهم» alone is a backchannel, «ماني فاهم» is the opposite.
+PHRASE_CUES = [normalize(p) for p in """
+    ما فهمت|ما فهمتك|ماني فاهم|مانيب فاهم|مو فاهم|مب فاهم|مو فاهمه|ماني فاهمه|مو واضح|مب واضح|ما سمعت|ما سمعتك
+    ما وصلني|وش تقول|ايش تقول|وش قلت|ايش قلت|وش تقصد|ايش تقصد|وش السالفه|عيدها|عيد الكلام|كرر|مره ثانيه
+    ما ابي|ما ابغى|ما ابغا|مابي|مابغى|ما ودي|ما يناسبني|ما يناسب|مو مناسب|مب مناسب
+    غلط|مو صحيح|مب صحيح|مو صح|مب صح|خطا|مو كذا|مب كذا
+    عندي سؤال|بسالك|ابي اسالك|ابغى اسالك|ممكن سؤال|ابي اكلم|ابغى اكلم|خلني اقول|خليني اقول|خلني اكمل|ممكن اقول
+    ما طلبت|ما حجزت|مو انا|ليش كذا|كيف يعني|يعني ايش|يعني وش
+""".replace("\n", "|").split("|") if p.strip()]
+PHRASE_RE = re.compile(r"(?:^| )(" + "|".join(re.escape(p) for p in sorted(PHRASE_CUES, key=len, reverse=True)) + r")(?: |$)")
 QUESTION_WORDS = _words("كم شنو وش ايش ليش ليه وين متى شلون كيف مين لماذا ماذا هل شو اش")
 SIDE_TALK = _words("يمه يما ماما بابا يابه اسكت اسكتي")          # talking to someone in the room
 SIDE_TALK_PHRASE = re.compile(r"(?:^| )يا (?:ولد|ولدي|بنت)(?: |$)")
@@ -150,6 +162,9 @@ def decide(text: str, agent_text: str = "", peak_db=None, ref_db=None):
     cue = find_cue(toks)
     if cue:
         return True, f"cue «{cue}»"
+    phrase = PHRASE_RE.search(norm)
+    if phrase:
+        return True, f"phrase «{phrase.group(1)}»"
     if peak_db is None:
         quiet = False
     elif ref_db is not None:

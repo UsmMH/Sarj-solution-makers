@@ -7,7 +7,7 @@ Nov 17 -> 18 (Day 3 -> Day 4).
 - User: Usama, final-year Information Systems student at KSU, working with a small team (some non-technical). He wants to go **step by step**, and wants **full git commands** (`git add ...` + `git commit -m "..."`), never just a message. He runs on Windows / PowerShell, RTX 3060 Ti laptop.
 - Event: Sarj AI Human-Like Turn Taking Hackathon, Arabic phone-call agent. 5 teams. Our system decides, every 20 ms, whether the agent should STOP, RESUME or TAKE_TURN.
 - Final ranking = 80 % Core score on a **hidden Arabic stream (Day 6, Nov 20)** + 20 % judges (originality 10, practical applicability 5, clarity of demo 5). Day 6 also has an unscored live-microphone demo the judges watch.
-- Deadlines: **connection check with the organisers by Day 4 (Nov 18)**; **code freeze Day 5 (Nov 19) 18:00** (`python -m ttbench.ready` prints commit hash + service list); final Day 6.
+- Deadlines: **code freeze Day 5 (Nov 19) 18:00** (`python -m ttbench.ready` prints commit hash + service list); final Day 6. The Day 4 connection check is most likely not happening (user, Nov 18): don't plan around it, but still test the system on the venue network before Day 6.
 - The Day 3 checkpoint did not happen as a test; mentors gave advice instead: no new data recording (augment the 24 calls), cloud APIs are allowed (they count in latency, must be declared).
 - Team name constant in `my_system.py` must stay: `TEAM = "Team 4 (for now :D)"`. Also keep `PEAK_DB = -20.0`.
 - Cost-conscious with OpenRouter: good models, but watch the price (key limit $1; ~$0.05 used by Nov 18).
@@ -73,7 +73,7 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
 1. **Late stops**: mostly fixed by the 400 ms lead-in (GI-D02/AM-D02 now ~0.5 s). Left: OV-D03 ~0.8 s (3-word rule: «يا أخي هذا» = 2 content words at 0.6 s), GI-D03 ~0.46 s. Idea: 2 words enough when the burst is as loud as the caller's voice. Check on clean + volume + stress sets, not by eye.
 2. RESUME: take back a wrong stop within 0.5 s (0.5 credit instead of 0) — insurance for the hidden set.
 3. TV / loud background early in a call can become the caller reference (loudstart stress). Text cannot solve BG-D01-type calls; state it in the write-up.
-4. Lexicon gaps from live tests: keep collecting (teammates use the demo). Still missing: negated understanding («ماني فاهم»), «أبغى» intents, fillers «يعني/شسمه».
+4. Lexicon: 60 multi-word Saudi/Gulf stop phrases added Nov 18 (`PHRASE_CUES`: «ماني فاهم», «وش تقول», «ما يناسبني», «غلط», «عندي سؤال», «عيد الكلام»…), from general usage, not the dev transcripts; replay of 2,719 logged decodes + 171 live demo decodes: 0 new stops (so no dev-score change; it is for unseen callers). Rejected: a 2-word rule when the burst is >= the caller's level (fixes OV-D03 but false-stops BG-D01 TV / NV-D03 in the replay). Still open: «أبغى…» intents (ambiguous with yes-answers), keep collecting from live demo tests.
 5. HT-D02 (dictation) takes the turn early; `eot_v2_candidate/` targets it (end-of-turn only, low priority).
 - Rule: no thresholds picked by eye from dev points. A number must come from a principle with a wide margin, or survive an augmentation built to break it. The -6 dB line WAS read off dev data (stated honestly in the write-up); -12 dB has a 10 dB margin.
 
