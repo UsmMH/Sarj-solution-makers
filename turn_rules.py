@@ -54,6 +54,8 @@ ACKS = _words("""
 NEUTRAL = _words("يا و ثم")
 STOCK = re.compile(r"(?:^| )(?:ترجمه|اشترك\w*|المشاهده|مشاهده)(?: |$)")      # what Whisper invents on noise
 LAUGH = re.compile(r"(?:ه|ها)+")
+WEAK_EVIDENCE_MIN_DB = -20.0   # dev data: every real stop peaked at -18 or louder, every false one at -24 or quieter (a synthetic cue: re-check on new data)
+MIN_CONTENT_WORDS = 3     # two odd words are what Whisper makes of noise («في بوح», «يوم ما»); three is real speech
 
 
 def tokens(text: str) -> list:
@@ -73,7 +75,7 @@ def is_ack(tok: str) -> bool:
 
 def find_cue(toks: list):
     for i, t in enumerate(toks):
-        if t == "لا" and i < 2:                       # «لا» only counts at the start of what was said
+        if t == "لا" and (i == 0 or (i == 1 and is_ack(toks[0]))):   # «لا» at the start, or «إيه… لا»; not mid-sentence
             return t
         if t in STOP_CUES or (len(t) >= 3 and t.startswith(PREFIX_CUES)):
             return t
@@ -91,8 +93,13 @@ def looks_like_echo(toks: list, agent_text: str) -> bool:
     return hits / len(toks) >= 0.7
 
 
-def decide(text: str, agent_text: str = ""):
-    """(stop?, reason). False means 'no reason to stop yet': a longer burst may still be decoded again."""
+def decide(text: str, agent_text: str = "", peak_db=None):
+    """(stop?, reason). False means 'no reason to stop yet': a longer burst may still be decoded again.
+
+    peak_db = loudest 20 ms of the burst (dBFS), if known. Only the weak paths (a question, or several unremarkable
+    words) need it: a quiet burst that Whisper turned into «ماذا شعب؟» is far more likely TV, echo or someone else
+    in the room than the caller. Stop cues are never gated.
+    """
     toks = tokens(text)
     norm = " ".join(toks)
     if not toks:
@@ -106,9 +113,12 @@ def decide(text: str, agent_text: str = ""):
     cue = find_cue(toks)
     if cue:
         return True, f"cue «{cue}»"
+    quiet = peak_db is not None and peak_db < WEAK_EVIDENCE_MIN_DB
     if len(toks) >= 2 and any(t in QUESTION_WORDS for t in toks):
-        return True, "question"
-    content = [t for t in toks if t not in NEUTRAL and not is_ack(t)]
-    if len(content) >= 2:
+        return (False, "question, but quiet") if quiet else (True, "question")
+    content = list(dict.fromkeys(t for t in toks if t not in NEUTRAL and not is_ack(t)))   # distinct words
+    if len(content) >= MIN_CONTENT_WORDS:
+        if quiet:
+            return False, f"{len(content)} words, but quiet"
         return True, f"{len(content)} words that are not acknowledgements"
     return False, "acknowledgement or too little to tell"

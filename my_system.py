@@ -57,6 +57,10 @@ GROW_MS = 100                               # ask for a fresh decode once the bu
 MAX_BURST_MS = 6000                         # decode at most this much of one burst
 PAD_MS = 100                                # a little audio before the burst starts
 RING_S = 10                                 # seconds of caller audio kept for the worker
+WARM = os.environ.get("ASR_WARM", "on").lower() != "off"     # keep the GPU awake between bursts: first decode 500 -> 270 ms
+WARM_EVERY_S = 0.6
+LOG_FILE = "asr_log.txt"                    # every decode, UTF-8: read this instead of the console (Arabic scrambles there)
+AGENT_HISTORY = 3                           # echo check looks at the agent's last few sentences, not only the current one
 
 
 def add_cuda_dlls():
@@ -96,17 +100,20 @@ class Asr:
             from faster_whisper import WhisperModel
             t0 = time.perf_counter()
             self.model = WhisperModel(ASR_MODEL, device="cuda", compute_type=ASR_COMPUTE)
-            self.transcribe(np.zeros(SR, dtype=np.float32))     # warm-up: a missing CUDA library shows up here, not mid-call
+            self.transcribe(np.zeros(SR, dtype=np.float32))[0]     # warm-up: a missing CUDA library shows up here, not mid-call
             self.ok = True
             print(f"[asr] {ASR_MODEL} on cuda/{ASR_COMPUTE} ready in {time.perf_counter() - t0:.1f}s", flush=True)
         except Exception as ex:                                  # no CPU fallback: ~3 s per decode is useless here
             self.ok = False
             print(f"[asr] NOT available ({ex!r}): energy rule only", flush=True)
 
-    def transcribe(self, audio: np.ndarray) -> str:
+    def transcribe(self, audio: np.ndarray):
+        """-> (text, mean avg_logprob of the segments): Whisper's own confidence, logged to study garbled decodes."""
         segs, _ = self.model.transcribe(audio, language="ar", beam_size=1, temperature=0.0,
                                         condition_on_previous_text=False, without_timestamps=True, max_new_tokens=24)
-        return " ".join(s.text.strip() for s in segs)
+        segs = list(segs)
+        logprob = float(np.mean([s.avg_logprob for s in segs])) if segs else 0.0
+        return " ".join(s.text.strip() for s in segs), logprob
 
 
 ASR = Asr()
@@ -116,6 +123,7 @@ class MySystem(System):
     def __init__(self):
         self.agent_talking = False
         self.agent_text = ""
+        self.agent_hist = []
         self.stopped = False
         self.hist = collections.deque(maxlen=FLOOR_WINDOW_MS // FRAME_MS)     # recent caller levels (dB)
         # energy fallback (step 2a)
@@ -145,10 +153,13 @@ class MySystem(System):
     # --- what is happening in the call -------------------------------------------------------------------
     def on_scenario_start(self, context=None):
         self.hist.clear()                                        # new call, possibly new noise
+        self.agent_hist = []
+        self._log(f"--- scenario {context!r}"[:200])
         self._reset_burst()
 
     def on_agent_start(self, text, duration_ms):
         self.agent_talking, self.agent_text, self.stopped = True, text, False
+        self.agent_hist = (self.agent_hist + [text])[-AGENT_HISTORY:]
         self.sound_ms, self.gap, self.burst_peak = 0, 0, NO_PEAK
         self._reset_burst()
 
@@ -239,7 +250,7 @@ class MySystem(System):
 
     def _request(self):
         with self._lock:
-            self._req = (self._epoch, self._burst_id, self._burst_start, self._n, self.agent_text)
+            self._req = (self._epoch, self._burst_id, self._burst_start, self._n, " ".join(self.agent_hist))
             self._last_req_end = self._n
         self._wake.set()
 
@@ -252,9 +263,24 @@ class MySystem(System):
                 return None
             return self._ring[np.arange(lo, hi) % size]        # fancy indexing makes a copy
 
+    def _log(self, line):
+        try:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
     def _worker(self):
+        silence = np.zeros(SR, dtype=np.float32)
         while True:
-            self._wake.wait()
+            woke = self._wake.wait(timeout=WARM_EVERY_S if WARM else None)
+            if not woke:                                       # WARM experiment: nothing to do, keep the GPU awake
+                if self.agent_talking and not self._in_burst:
+                    try:
+                        ASR.transcribe(silence)
+                    except Exception:
+                        pass
+                continue
             with self._lock:
                 req, self._req = self._req, None
                 self._wake.clear()
@@ -266,16 +292,20 @@ class MySystem(System):
                 continue
             try:
                 t0 = time.perf_counter()
-                text = ASR.transcribe(audio)
+                text, logprob = ASR.transcribe(audio)
                 ms = (time.perf_counter() - t0) * 1000
                 self._fails = 0
             except Exception as ex:
                 self._fails += 1
                 print(f"[asr] decode failed ({ex!r}); {self._fails} in a row", flush=True)
                 continue
-            stop, why = decide(text, agent_text)
-            print(f"[asr] burst {burst_id} {len(audio) / SR:.1f}s ({ms:.0f} ms): {text!r} -> "
-                  f"{'STOP' if stop else 'keep'} ({why})", flush=True)
+            fr = audio[: len(audio) // FRAME_SAMPLES * FRAME_SAMPLES].reshape(-1, FRAME_SAMPLES)
+            pk = 20 * np.log10(np.sqrt((fr.astype(np.float64) ** 2).mean(axis=1)).max() + 1e-12) if len(fr) else -99.0
+            stop, why = decide(text, agent_text, peak_db=float(pk))
+            line = (f"[asr] burst {burst_id} {len(audio) / SR:.1f}s ({ms:.0f} ms, lp {logprob:.2f}, pk {pk:.0f} dB): {text!r} -> "
+                    f"{'STOP' if stop else 'keep'} ({why})")
+            print(line, flush=True)
+            self._log(line)
             if stop:
                 with self._lock:
                     if epoch == self._epoch and self.agent_talking and not self.stopped:
