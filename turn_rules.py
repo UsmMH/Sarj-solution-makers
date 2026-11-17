@@ -151,3 +151,16 @@ def decide(text: str, agent_text: str = "", peak_db=None):
             return False, f"{len(content)} words, but quiet"
         return True, f"{len(content)} words that are not acknowledgements"
     return False, "acknowledgement or too little to tell"
+
+
+def worth_second_opinion(text: str, why: str, allow_quiet: bool = False) -> bool:
+    """decide() said keep, but not for a sure reason: ask the LLM (llm_judge.py).
+
+    Sure keeps (nothing heard, stock phrase, echo, side talk) and plain acknowledgements are never asked.
+    Quiet bursts are asked only with allow_quiet: on the dev data they were all TV, echo or noise.
+    """
+    if why == "question, but quiet" or why.endswith("words, but quiet"):
+        return allow_quiet
+    if why != "acknowledgement or too little to tell":
+        return False
+    return any(t not in NEUTRAL and not is_ack(t) for t in tokens(text))
