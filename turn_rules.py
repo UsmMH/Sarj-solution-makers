@@ -93,6 +93,35 @@ def looks_like_echo(toks: list, agent_text: str) -> bool:
     return hits / len(toks) >= 0.7
 
 
+# --- end of turn: has the caller finished, or only paused? -------------------------------------------------------------
+# Whisper keeps a trailing «...» or «،» when a sentence hangs, and a last word like «و», «يعني», «في» or «اممم» means
+# something is still coming. This only decides how long to wait; it never makes the agent take the turn earlier.
+EOT_FILLERS = _words("ا ام امم مم م هم همم اه اوه")
+EOT_OPEN_WORDS = _words("""
+    و ف ب ل ثم او لكن بس لان علشان عشان اللي الي الذي التي ان انه انها
+    في من على الى عن مع حتى زي مثل مثلا يعني اقصد شسمه شوف
+""")
+EOT_OPEN_END = ("...", "…", "،", ",", "-", "—")
+
+
+def eot_incomplete(text: str):
+    """(incomplete?, reason). True = the caller probably paused mid-thought: wait longer before taking the turn."""
+    raw = (text or "").strip()
+    toks = tokens(raw)
+    if not toks:
+        return False, "nothing heard"
+    if STOCK.search(" ".join(toks)):
+        return False, "stock phrase the ASR invents on noise"
+    if raw.endswith(EOT_OPEN_END):
+        return True, "trailing «...» or comma"
+    last = toks[-1]
+    if last in EOT_FILLERS:
+        return True, f"ends on filler «{last}»"
+    if last in EOT_OPEN_WORDS:
+        return True, f"ends on «{last}»"
+    return False, "sounds finished"
+
+
 def decide(text: str, agent_text: str = "", peak_db=None):
     """(stop?, reason). False means 'no reason to stop yet': a longer burst may still be decoded again.
 

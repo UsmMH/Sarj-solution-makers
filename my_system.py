@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 
-from turn_rules import decide
+from turn_rules import decide, eot_incomplete
 from ttbench.server import System, run
 
 try:                                        # Arabic in log lines must never crash a thread on Windows
@@ -61,6 +61,13 @@ WARM = os.environ.get("ASR_WARM", "on").lower() != "off"     # keep the GPU awak
 WARM_EVERY_S = 0.6
 LOG_FILE = "asr_log.txt"                    # every decode, UTF-8: read this instead of the console (Arabic scrambles there)
 AGENT_HISTORY = 3                           # echo check looks at the agent's last few sentences, not only the current one
+
+# --- end of turn, smart version (only when the ASR works; EOT=off gives the old fixed 700 ms rule) ------------------------
+EOT_SMART = os.environ.get("EOT", "on").lower() != "off"
+EOT_PROBE_MS = 300                          # caller quiet this long -> decode what they just said
+EOT_WINDOW_MS = 4000                        # ...the last 4 s of their audio (only the ending matters)
+EOT_WAIT_RESULT_MS = 900                    # no answer from the ASR by then -> take the turn anyway
+EOT_HOLD_MS = 1600                          # text ends mid-thought: wait this long (total quiet) before taking the turn
 
 
 def add_cuda_dlls():
@@ -107,10 +114,11 @@ class Asr:
             self.ok = False
             print(f"[asr] NOT available ({ex!r}): energy rule only", flush=True)
 
-    def transcribe(self, audio: np.ndarray):
+    def transcribe(self, audio: np.ndarray, max_new_tokens: int = 24):
         """-> (text, mean avg_logprob of the segments): Whisper's own confidence, logged to study garbled decodes."""
         segs, _ = self.model.transcribe(audio, language="ar", beam_size=1, temperature=0.0,
-                                        condition_on_previous_text=False, without_timestamps=True, max_new_tokens=24)
+                                        condition_on_previous_text=False, without_timestamps=True,
+                                        max_new_tokens=max_new_tokens)
         segs = list(segs)
         logprob = float(np.mean([s.avg_logprob for s in segs])) if segs else 0.0
         return " ".join(s.text.strip() for s in segs), logprob
@@ -133,6 +141,10 @@ class MySystem(System):
         # end of turn (baseline)
         self.quiet_ms = 0
         self.caller_spoke = False
+        self._eot_id = 0                                         # changes whenever the caller makes sound again
+        self._eot_probed = False
+        self._eot_req = None
+        self._eot_res = None                                     # (eot_id, incomplete?, reason) for the current silence
         # ASR path: the 20 ms loop writes, one worker thread reads
         self._lock = threading.Lock()
         self._wake = threading.Event()
@@ -187,14 +199,31 @@ class MySystem(System):
                 return None
             return self._energy_stop(loud_stop, db)           # ASR missing or failing: step-2a behaviour
 
+        smart = EOT_SMART and ASR.ok and self._fails < 3
         if loud_eot:
             self.caller_spoke, self.quiet_ms = True, 0
+            self._eot_id += 1                                  # any probe in flight is now out of date
+            self._eot_probed, self._eot_res = False, None
         elif self.caller_spoke:
             self.quiet_ms += FRAME_MS
-            if self.quiet_ms >= TAKE_TURN_AFTER_MS:
+            if smart and not self._eot_probed and self.quiet_ms >= EOT_PROBE_MS:
+                self._eot_probed = True
+                self._request_eot()
+            if self.quiet_ms >= TAKE_TURN_AFTER_MS and self._eot_ready(smart):
                 self.caller_spoke = False
                 return "TAKE_TURN"
         return None
+
+    def _eot_ready(self, smart):
+        """Quiet for 700 ms already. Take the turn now, or is the caller probably still thinking?"""
+        if not smart:
+            return True
+        res = self._eot_res
+        if res is None:                                        # the ASR has not answered yet
+            return self.quiet_ms >= EOT_WAIT_RESULT_MS
+        if res[1]:                                             # text ends mid-thought: give them more time
+            return self.quiet_ms >= EOT_HOLD_MS
+        return True
 
     # --- energy fallback ---------------------------------------------------------------------------------
     def _energy_stop(self, loud, db):
@@ -219,6 +248,8 @@ class MySystem(System):
             self._quiet = 0
             self._req = None
             self._stop_flag = False
+            self._eot_id += 1                                  # a new agent turn: old end-of-turn probes are stale
+            self._eot_probed, self._eot_res, self._eot_req = False, None, None
 
     def _push(self, caller):
         x = caller.astype(np.float32) / 32768.0
@@ -254,6 +285,31 @@ class MySystem(System):
             self._last_req_end = self._n
         self._wake.set()
 
+    def _request_eot(self):
+        with self._lock:
+            self._eot_req = (self._eot_id, self._n - EOT_WINDOW_MS * SR // 1000, self._n)
+        self._wake.set()
+
+    def _do_eot(self, ereq):
+        eot_id, start, end = ereq
+        audio = self._snapshot(max(start, 0), end)
+        if audio is None:
+            return
+        try:
+            t0 = time.perf_counter()
+            text, _ = ASR.transcribe(audio, max_new_tokens=64)
+            ms = (time.perf_counter() - t0) * 1000
+        except Exception as ex:
+            self._fails += 1
+            print(f"[asr] eot decode failed ({ex!r}); {self._fails} in a row", flush=True)
+            return
+        inc, why = eot_incomplete(text)
+        line = f"[eot] ({ms:.0f} ms): {text!r} -> {'WAIT' if inc else 'take turn'} ({why})"
+        print(line, flush=True)
+        self._log(line)
+        if eot_id == self._eot_id:                             # the caller has not made sound since
+            self._eot_res = (eot_id, inc, why)
+
     def _snapshot(self, start, end):
         with self._lock:
             size = len(self._ring)
@@ -275,7 +331,7 @@ class MySystem(System):
         while True:
             woke = self._wake.wait(timeout=WARM_EVERY_S if WARM else None)
             if not woke:                                       # WARM experiment: nothing to do, keep the GPU awake
-                if self.agent_talking and not self._in_burst:
+                if not self._in_burst and (self.agent_talking or (self.caller_spoke and EOT_SMART)):
                     try:
                         ASR.transcribe(silence)
                     except Exception:
@@ -283,7 +339,10 @@ class MySystem(System):
                 continue
             with self._lock:
                 req, self._req = self._req, None
+                ereq, self._eot_req = self._eot_req, None
                 self._wake.clear()
+            if ereq is not None:
+                self._do_eot(ereq)
             if req is None:
                 continue
             epoch, burst_id, start, end, agent_text = req
