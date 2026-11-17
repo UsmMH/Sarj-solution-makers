@@ -55,7 +55,8 @@ HANG_MS = 300                               # this much quiet ends a burst (word
 FIRST_DECODE_MS = 300                       # do not decode a burst shorter than this
 GROW_MS = 100                               # ask for a fresh decode once the burst has grown by this much
 MAX_BURST_MS = 6000                         # decode at most this much of one burst
-PAD_MS = 100                                # a little audio before the burst starts
+PAD_MS = 400                                # audio before the burst starts: with only 100 ms, Whisper turned short real speech
+                                            # into «ترجمة نانسي قنقر» (6/27 stop pieces); with 400 ms, 0/27 and no new false stops
 RING_S = 10                                 # seconds of caller audio kept for the worker
 WARM = os.environ.get("ASR_WARM", "on").lower() != "off"     # keep the GPU awake between bursts: first decode 500 -> 270 ms
 WARM_EVERY_S = 0.6
@@ -380,7 +381,8 @@ class MySystem(System):
                 self._fails += 1
                 print(f"[asr] decode failed ({ex!r}); {self._fails} in a row", flush=True)
                 continue
-            fr = audio[: len(audio) // FRAME_SAMPLES * FRAME_SAMPLES].reshape(-1, FRAME_SAMPLES)
+            body = audio[min(PAD_MS * SR // 1000, max(0, len(audio) - FRAME_SAMPLES)):]   # loudness: the burst only, not the lead-in
+            fr = body[: len(body) // FRAME_SAMPLES * FRAME_SAMPLES].reshape(-1, FRAME_SAMPLES)
             pk = 20 * np.log10(np.sqrt((fr.astype(np.float64) ** 2).mean(axis=1)).max() + 1e-12) if len(fr) else -99.0
             stop, why = decide(text, agent_text, peak_db=float(pk), ref_db=ref)
             rel = f"{pk - ref:+.0f}" if ref is not None else "n/a"

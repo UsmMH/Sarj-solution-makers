@@ -54,17 +54,23 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
 6. End of turn: caller quiet 300 ms -> decode last 4 s -> if the text ends mid-thought wait up to 1.6 s, else 0.7 s. **After our own STOP the caller has the floor**: TAKE_TURN follows their silence even if they went quiet before the STOP landed (a short «لا» used to leave 8 s of dead air).
 
 ## Results (Core on 24 calls; same code varies ~±2 run to run)
-| set | before Nov 17 fixes | now |
+| set | before Nov 17 fixes | relative gate (Nov 17) | + 400 ms lead-in (Nov 18, current) |
+|---|---|---|---|
+| clean dev | 79.8-89.8 | 86.5-90.1 (R ~0.80, S 1.00) | **94.6** (R 0.93, S 1.00) |
+| caller -12 dB | 74.4 (2 misses: -20 dB gate blocked them) | 89.4 | **93.5** (R 0.90, S 1.00) |
+| loudstart+8 (stress) | — | 86.2, 2 false stops | **89.7**, 1 false stop (BG-D01: loud early TV = reference) |
+- 400 ms lead-in (`PAD_MS`): Whisper turned short abrupt clips of real speech into «ترجمة نانسي قنقر»; with 0.4 s of audio before the burst: stock phrase on 0/27 stop pieces (was 6/27), 6/9 stops caught at the first 0.4 s decode, 0/48 false stops (`prompt_probe.py`). GI-D02 1.20 -> 0.54 s late, AM-D02 1.44 -> 0.51 s. Rejected in the same test: Whisper initial prompt (echoed the prompt as speech -> false STOP), beam-5 retry (swapped one invented phrase for another).
+- Older rows below were measured before the lead-in:
+
+| set | before Nov 17 fixes | now (before lead-in) |
 |---|---|---|
-| clean dev | 79.8-89.8 | 86.5-90.1 (R ~0.82, S 1.00) |
-| caller -12 dB | 74.4 (2 misses: -20 dB gate blocked them) | 89.4 |
 | caller -6 / +6 dB | — | 87.5-88.6 / 89.9 |
 | loudstart+8 (stress) | — | 86.2 (2 false stops: loud TV early becomes the reference) |
 | click (stress) | 80.4 (click pushed the reference ~9 dB up) | 80.2 with the sustained reference: the reference is now right (AM-D02 +5 dB vs caller, as on clean), the miss is AM-D02 landing just past the 1.5 s deadline = a late-stop problem; clean 87.0 in the same session |
 - Shelved, with numbers: LLM STOP/KEEP judge on undecided texts (2-4 would-be false stops per model, ~1 helpful, 0.5-1 s); cloud audio models as ASR (best 0.83 match in 2.4-3.9 s vs Whisper 0.75 in 0.5 s). Late stops come from short first decodes and the 3-word rule, not from the recogniser.
 
 ## Known weak spots / next work (priority)
-1. **Late stops** (main loss in R): GI-D02 ~1.1 s (Whisper invents «ترجمة نانسي قنقر» on the first 0.4 s of noisy audio), AM-D02 ~1.1 s («طيب؟ … بس كم» split into two bursts), GI-D03/OV-D03 0.4-1.0 s (3-word rule). Ideas: carry text across short pauses within one agent utterance; 2 words enough when the burst is as loud as the caller; skip a stock-phrase first decode. Check each on clean + volume + stress sets, not by eye.
+1. **Late stops**: mostly fixed by the 400 ms lead-in (GI-D02/AM-D02 now ~0.5 s). Left: OV-D03 ~0.8 s (3-word rule: «يا أخي هذا» = 2 content words at 0.6 s), GI-D03 ~0.46 s. Idea: 2 words enough when the burst is as loud as the caller's voice. Check on clean + volume + stress sets, not by eye.
 2. RESUME: take back a wrong stop within 0.5 s (0.5 credit instead of 0) — insurance for the hidden set.
 3. TV / loud background early in a call can become the caller reference (loudstart stress). Text cannot solve BG-D01-type calls; state it in the write-up.
 4. Lexicon gaps from live tests: keep collecting (teammates use the demo). Still missing: negated understanding («ماني فاهم»), «أبغى» intents, fillers «يعني/شسمه».
