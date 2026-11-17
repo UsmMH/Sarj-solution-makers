@@ -56,6 +56,7 @@ STOCK = re.compile(r"(?:^| )(?:ترجمه|اشترك\w*|المشاهده|مشا�
 LAUGH = re.compile(r"(?:ه|ها)+")
 WEAK_EVIDENCE_MIN_DB = -20.0   # fallback only (no reference yet): absolute peak; fails when the whole line is quieter
 WEAK_EVIDENCE_REL_DB = -6.0    # peak vs the caller's own earlier voice: real stops -2..+6 dB, TV / echo / background -11..-18 dB
+FAR_QUIETER_REL_DB = -12.0     # this far under the caller's voice, not even a stop cue counts: Whisper hears «بس» in echo
 MIN_CONTENT_WORDS = 3     # two odd words are what Whisper makes of noise («في بوح», «يوم ما»); three is real speech
 
 
@@ -143,6 +144,8 @@ def decide(text: str, agent_text: str = "", peak_db=None, ref_db=None):
         return False, "echo of the agent's own words"
     if any(t in SIDE_TALK for t in toks) or SIDE_TALK_PHRASE.search(norm):
         return False, "talking to someone else in the room"
+    if peak_db is not None and ref_db is not None and peak_db - ref_db < FAR_QUIETER_REL_DB:
+        return False, "far quieter than the caller: TV, echo or someone else"
     cue = find_cue(toks)
     if cue:
         return True, f"cue «{cue}»"
