@@ -61,6 +61,7 @@ WARM = os.environ.get("ASR_WARM", "on").lower() != "off"     # keep the GPU awak
 WARM_EVERY_S = 0.6
 LOG_FILE = "asr_log.txt"                    # every decode, UTF-8: read this instead of the console (Arabic scrambles there)
 AGENT_HISTORY = 3                           # echo check looks at the agent's last few sentences, not only the current one
+REF_WINDOW_FRAMES = 10                      # 200 ms: the caller's reference voice must come from sustained sound
 
 # --- end of turn, smart version (only when the ASR works; EOT=off gives the old fixed 700 ms rule) ------------------------
 EOT_SMART = os.environ.get("EOT", "on").lower() != "off"
@@ -136,6 +137,7 @@ class MySystem(System):
         self.hist = collections.deque(maxlen=FLOOR_WINDOW_MS // FRAME_MS)     # recent caller levels (dB)
         self._ref_db = NO_PEAK                                   # caller's loudest 20 ms this call, outside bursts being judged
         self._burst_ref = None
+        self._ref_win = collections.deque(maxlen=REF_WINDOW_FRAMES)   # (dB, loud?) of the last 200 ms
         # energy fallback (step 2a)
         self.sound_ms = 0
         self.gap = 0
@@ -169,6 +171,7 @@ class MySystem(System):
         self.hist.clear()                                        # new call, possibly new noise
         self.agent_hist = []
         self._ref_db = NO_PEAK                                   # new caller, new line: no reference voice yet
+        self._ref_win.clear()
         self._log(f"--- scenario {context!r}"[:200])
         self._reset_burst()
 
@@ -179,7 +182,10 @@ class MySystem(System):
         self._reset_burst()
 
     def on_agent_end(self):
-        self.agent_talking, self.caller_spoke, self.quiet_ms = False, False, 0
+        # We stopped because the caller spoke: they have the floor even if they already went quiet (a short «لا»
+        # can be over before the STOP lands), so the end-of-turn clock starts now instead of waiting for new sound.
+        took_floor = self.stopped
+        self.agent_talking, self.caller_spoke, self.quiet_ms = False, took_floor, 0
         self._reset_burst()
 
     # --- every 20 ms: decide ---------------------------------------------------------------------------
@@ -197,7 +203,7 @@ class MySystem(System):
             if ASR.ok and self._fails < 3:
                 self._track_burst(loud_stop)
                 if not self._in_burst:                         # a burst never sets its own reference
-                    self._ref_db = max(self._ref_db, db)
+                    self._update_ref(db, loud_stop)
                 if self._stop_flag:
                     self.stopped = True
                     return "STOP"
@@ -205,7 +211,7 @@ class MySystem(System):
             return self._energy_stop(loud_stop, db)           # ASR missing or failing: step-2a behaviour
 
         smart = EOT_SMART and ASR.ok and self._fails < 3
-        self._ref_db = max(self._ref_db, db)                   # the agent is quiet: this is the caller's own turn
+        self._update_ref(db, loud_stop)                        # the agent is quiet: this is the caller's own turn
         if loud_eot:
             self.caller_spoke, self.quiet_ms = True, 0
             self._eot_id += 1                                  # any probe in flight is now out of date
@@ -219,6 +225,14 @@ class MySystem(System):
                 self.caller_spoke = False
                 return "TAKE_TURN"
         return None
+
+    def _update_ref(self, db, loud):
+        """The caller's reference voice = the loudest frame of SUSTAINED sound: at least half of the last 200 ms is
+        loud. Speech always qualifies; a click or a bump on the mic (a few frames) never sets the reference."""
+        self._ref_win.append((db, loud))
+        if sum(1 for _, l in self._ref_win) >= REF_WINDOW_FRAMES and \
+                sum(1 for _, l in self._ref_win if l) * 2 >= REF_WINDOW_FRAMES:
+            self._ref_db = max(self._ref_db, max(d for d, _ in self._ref_win))
 
     def _eot_ready(self, smart):
         """Quiet for 700 ms already. Take the turn now, or is the caller probably still thinking?"""

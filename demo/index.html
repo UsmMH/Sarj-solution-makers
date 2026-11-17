@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turn-Taking Live Demo</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e2e0da;
+    --accent: #2f6fde; --stop: #d4402f; --take: #1f8a4c; --warn: #b7791f; --meter: #dcdad4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #212120; --ink: #ecebe7; --muted: #a09e98; --line: #34332f;
+            --accent: #6b9cf0; --stop: #ef6b5b; --take: #4cc184; --warn: #e0a84a; --meter: #3a3935; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.ok { color: var(--take); border-color: var(--take); }
+  .pill.bad { color: var(--stop); border-color: var(--stop); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 14px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
+                   background: var(--panel); color: var(--ink); }
+  select { flex: 1; min-width: 220px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .45; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .agent { display: grid; grid-template-columns: 130px 1fr; gap: 14px; align-items: center; }
+  .state { text-align: center; font-weight: 700; letter-spacing: .04em; padding: 14px 6px; border-radius: 8px;
+           border: 2px solid var(--line); color: var(--muted); font-size: 14px; }
+  .state.speaking { border-color: var(--accent); color: var(--accent); }
+  .state.stopped { border-color: var(--stop); color: var(--stop); background: color-mix(in srgb, var(--stop) 10%, transparent); }
+  .state.listening { border-color: var(--take); color: var(--take); }
+  .state.thinking { border-color: var(--warn); color: var(--warn); }
+  textarea { width: 100%; font: inherit; font-size: 16px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
+             background: var(--panel); color: var(--ink); margin-bottom: 10px; resize: vertical; }
+  tr.you td.k { color: var(--accent); }
+  .sentence { font-size: 19px; line-height: 1.7; direction: rtl; text-align: right; min-height: 2em; }
+  .sentence .label { display: block; direction: ltr; text-align: left; font-size: 12px; color: var(--muted); }
+  .progress { height: 4px; background: var(--meter); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); }
+  .meter { position: relative; height: 34px; background: var(--meter); border-radius: 6px; margin: 26px 0 22px; }
+  .meter .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 6px; background: var(--accent);
+                transition: width 80ms linear; opacity: .8; }
+  .mark { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--ink); display: none; }
+  .mark span { position: absolute; white-space: nowrap; font-size: 11px; color: var(--muted); transform: translateX(-50%); }
+  .mark.top span { top: -16px; } .mark.bottom span { bottom: -16px; }
+  .mark.ref { background: var(--take); } .mark.r6 { background: var(--warn); } .mark.r12 { background: var(--stop); }
+  .legend { font-size: 12px; color: var(--muted); }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+  .stats b { color: var(--ink); font-size: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  td { padding: 6px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+  td.t { color: var(--muted); white-space: nowrap; width: 54px; }
+  td.k { white-space: nowrap; width: 86px; font-weight: 600; }
+  td.ar { direction: rtl; text-align: right; font-size: 15px; }
+  td.why { color: var(--muted); width: 38%; }
+  tr.stop td.k, tr.stop td.why { color: var(--stop); }
+  tr.take td.k { color: var(--take); }
+  tr.big td { font-weight: 700; }
+  .log { max-height: 420px; overflow: auto; }
+  @media (max-width: 640px) { .agent { grid-template-columns: 1fr; } td.why { width: auto; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Team 4 · live turn-taking demo</h1>
+    <span id="conn" class="pill">connecting…</span>
+  </header>
+
+  <section class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <select id="mode" style="flex:0 1 auto;min-width:0">
+        <option value="free">Free conversation (LLM agent, Arabic voice)</option>
+        <option value="dev">Recorded call (dev agent sentences)</option>
+      </select>
+      <select id="voice" style="min-width:180px" title="Agent voice (GPT-audio-mini, Saudi accent)">
+        <option value="shimmer">Voice: Shimmer (female)</option>
+        <option value="ash">Voice: Ash (male)</option>
+        <option value="coral">Voice: Coral (female)</option>
+        <option value="sage">Voice: Sage (female)</option>
+        <option value="ballad">Voice: Ballad (male)</option>
+        <option value="verse">Voice: Verse (male)</option>
+        <option value="alloy">Voice: Alloy</option>
+        <option value="echo">Voice: Echo (male)</option>
+      </select>
+    </div>
+    <textarea id="scenario" rows="2" dir="rtl" placeholder="سيناريو المكالمة (فاضي = تذكير بموعد عيادة أسنان)"></textarea>
+    <div class="row">
+      <select id="call"></select>
+      <button id="start" class="primary" disabled>Start call</button>
+      <button id="hang" disabled>Hang up</button>
+    </div>
+    <div class="hint">Use headphones. Interrupt the agent («لحظة», «لا لا», a question…) or just say «إيه» and see if it keeps talking.
+      When you finish speaking, the agent takes its turn and goes on.</div>
+  </section>
+
+  <section class="panel">
+    <div class="agent">
+      <div id="state" class="state">IDLE</div>
+      <div>
+        <div class="sentence"><span class="label" id="uttlabel">agent</span><span id="sentence">—</span></div>
+        <div class="progress"><div id="prog"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="legend">Your microphone level (dBFS). Lines: <span style="color:var(--take)">your voice</span> (loudest so far this call) ·
+      <span style="color:var(--warn)">−6 dB</span>: quieter needs a clear cue · <span style="color:var(--stop)">−12 dB</span>: quieter is ignored (TV, echo)</div>
+    <div class="meter" id="meter">
+      <div class="bar" id="bar"></div>
+      <div class="mark top" id="mfloor" style="background:var(--muted)"><span>noise floor</span></div>
+      <div class="mark top ref" id="mref"><span>your voice</span></div>
+      <div class="mark bottom r6" id="mr6"><span>−6</span></div>
+      <div class="mark bottom r12" id="mr12"><span>−12</span></div>
+    </div>
+    <div class="stats">
+      <div>STOP <b id="nstop">0</b></div>
+      <div>TAKE_TURN <b id="ntake">0</b></div>
+      <div>Whisper decodes <b id="ndec">0</b></div>
+      <div>last decode <b id="lastms">–</b></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row" style="justify-content:space-between"><b>What the system heard and decided</b>
+      <button id="clear">Clear</button></div>
+    <div class="log"><table><tbody id="log"></tbody></table></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const MIN_DB = -70, MAX_DB = 0;
+let ws, calls = [], call = null, idx = 0, ctx, micNode, src = null, speaking = false, inCall = false;
+let t0 = 0, playStart = 0, playDur = 0, noReplyTimer = null, counts = {stop: 0, take: 0, dec: 0};
+
+function pct(db) { return Math.max(0, Math.min(100, (db - MIN_DB) / (MAX_DB - MIN_DB) * 100)); }
+function now() { return ((performance.now() - t0) / 1000).toFixed(1); }
+
+function setState(s) {
+  const el = $("state");
+  el.className = "state " + s.toLowerCase();
+  el.textContent = s === "stopped" ? "STOPPED" : s.toUpperCase();
+}
+
+function addRow(kind, ar, why, cls) {
+  const tr = document.createElement("tr");
+  if (cls) tr.className = cls;
+  tr.innerHTML = `<td class="t">${inCall ? now() + "s" : ""}</td><td class="k"></td><td class="ar"></td><td class="why"></td>`;
+  tr.children[1].textContent = kind; tr.children[2].textContent = ar || "";
+  // why = a string, or a list of pieces; each piece sits in its own <bdi> so Arabic never scrambles the English
+  for (const [i, piece] of (Array.isArray(why) ? why : [why || ""]).entries()) {
+    if (i) tr.children[3].append(" · ");
+    const b = document.createElement("bdi"); b.textContent = piece; tr.children[3].append(b);
+  }
+  $("log").prepend(tr);
+}
+
+// "[asr] burst 3 0.6s (271 ms, lp -0.30, pk -16 dB, vs caller +2 dB): 'لالا' -> STOP (cue «لا»)"
+function onLog(line) {
+  const m = line.match(/^\[(asr|eot)\] .*?\((\d+) ms.*?\)?: (['"])(.*)\3 -> (\S+(?: \S+)?) \((.*)\)$/);
+  if (!m) { addRow("info", "", line); return; }
+  counts.dec++; $("ndec").textContent = counts.dec; $("lastms").textContent = m[2] + " ms";
+  const vs = line.match(/vs caller ([^ ]+) dB/);
+  const kind = m[1] === "asr" ? "heard" : "end check";
+  const decision = m[5];
+  const why = [decision, m[6]];
+  if (vs) why.push(vs[1] === "n/a" ? "no reference voice yet" : `${vs[1]} dB vs your voice`);
+  addRow(kind, m[4], why, decision === "STOP" ? "stop" : "");
+}
+
+function onDecision(d) {
+  if (d === "STOP") {
+    counts.stop++; $("nstop").textContent = counts.stop;
+    addRow("STOP", "", "agent goes silent: you have the floor", "stop big");
+    if (speaking) stopAgent(true);
+  } else if (d === "TAKE_TURN") {
+    counts.take++; $("ntake").textContent = counts.take;
+    addRow("TAKE_TURN", "", "you finished: the agent continues", "take big");
+    clearTimeout(noReplyTimer);
+    if (!speaking && inCall && !free) setTimeout(() => playUtt(idx + 1), 250);   // free mode: the server replies
+  } else if (d === "RESUME") {
+    addRow("RESUME", "", "the system took its stop back");
+  }
+}
+
+function setMark(id, db, show) {
+  const el = $(id);
+  if (!show || db == null) { el.style.display = "none"; return; }
+  el.style.display = "block"; el.style.left = pct(db) + "%";
+}
+
+function onLevel(m) {
+  $("bar").style.width = pct(m.db) + "%";
+  setMark("mfloor", m.floor, m.floor != null && m.floor > MIN_DB);
+  setMark("mref", m.ref, m.ref != null);
+  setMark("mr6", m.ref == null ? null : m.ref - 6, m.ref != null);
+  setMark("mr12", m.ref == null ? null : m.ref - 12, m.ref != null);
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { $("conn").textContent = "connected"; $("conn").className = "pill ok"; $("start").disabled = false; };
+  ws.onclose = () => { $("conn").textContent = "disconnected: is demo.py running?"; $("conn").className = "pill bad";
+                       $("start").disabled = true; };
+  ws.onmessage = e => {
+    if (e.data instanceof ArrayBuffer) { playChunk(e.data); return; }      // the agent's voice, streamed
+    const m = JSON.parse(e.data);
+    if (m.type === "log") onLog(m.line);
+    else if (m.type === "decision") onDecision(m.decision);
+    else if (m.type === "level") onLevel(m);
+    else if (m.type === "info") addRow("info", "", m.text);
+    else if (m.type === "agent_say") { if (inCall) (m.audio === "stream" ? beginStream(m) : say(m.text, m.end)); }
+    else if (m.type === "agent_audio_end") endStream(m);
+    else if (m.type === "agent_text") { if (stream && m.speech === stream.speech) { stream.text = m.text; $("sentence").textContent = m.text; } }
+    else if (m.type === "caller_turn") addRow("you said", m.text, "your whole turn, as the LLM reads it", "you");
+    else if (m.type === "thinking") { if (m.on && inCall && !speaking) setState("thinking"); }
+  };
+}
+
+const WORKLET = `
+class Mic extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(320); this.n = 0; this.ratio = sampleRate / 16000; this.pos = 0; }
+  process(inputs) {
+    const ch = inputs[0][0]; if (!ch) return true;
+    for (; this.pos < ch.length; this.pos += this.ratio) {
+      const s = Math.max(-1, Math.min(1, ch[Math.floor(this.pos)]));
+      this.buf[this.n++] = s * 32767;
+      if (this.n === 320) { this.port.postMessage(this.buf.buffer.slice(0)); this.n = 0; }
+    }
+    this.pos -= ch.length;
+    return true;
+  }
+}
+registerProcessor("mic", Mic);`;
+
+async function ensureAudio() {
+  if (ctx) return;
+  ctx = new AudioContext({sampleRate: 16000});
+  const stream = await navigator.mediaDevices.getUserMedia({audio: {
+    channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false}});   // raw voice: headphones, no AEC
+  const tr = stream.getAudioTracks()[0], st = tr.getSettings();
+  addRow("info", "", `microphone: ${tr.label || "default"} · ${st.sampleRate || "?"} Hz · echo cancel ${st.echoCancellation} · auto gain ${st.autoGainControl}`);
+  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], {type: "application/javascript"})));
+  micNode = new AudioWorkletNode(ctx, "mic");
+  micNode.port.onmessage = e => { if (inCall && ws && ws.readyState === 1) ws.send(e.data); };
+  ctx.createMediaStreamSource(stream).connect(micNode);
+}
+
+async function playUtt(i) {
+  clearTimeout(noReplyTimer);
+  if (!inCall) return;
+  if (i >= call.utterances.length) { endCall("the agent has no more sentences"); return; }
+  idx = i;
+  const u = call.utterances[i];
+  $("sentence").textContent = u.text; $("uttlabel").textContent = `agent · sentence ${i + 1} of ${call.utterances.length}`;
+  const buf = await ctx.decodeAudioData(await (await fetch(`/clip/${call.id}/${u.id}.wav`)).arrayBuffer());
+  if (!inCall) return;
+  src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
+  playDur = buf.duration; playStart = ctx.currentTime;
+  ws.send(JSON.stringify({type: "agent_start", text: u.text, duration_ms: Math.round(buf.duration * 1000)}));
+  speaking = true; setState("speaking");
+  src.onended = () => { if (speaking) stopAgent(false); };
+  src.start();
+}
+
+function stopAgent(byStop) {
+  if (free && stream && byStop) spokenChars = streamSpokenChars();
+  speaking = false;
+  if (free) { cancelled = true; speechSynthesis.cancel(); stopStream(); }
+  else { try { src && src.stop(); } catch (e) {} }
+  ws.send(JSON.stringify({type: "agent_end", spoken_chars: free ? spokenChars : null}));
+  if (free && lastLine && !byStop) { endCall("the agent said goodbye"); return; }
+  setState(byStop ? "stopped" : "listening");
+  clearTimeout(noReplyTimer);
+  // nobody answers: carry on after a while, like an agent would
+  noReplyTimer = setTimeout(() => {
+    if (!inCall || speaking) return;
+    addRow("info", "", "no reply: the agent goes on");
+    if (free) ws.send(JSON.stringify({type: "chat_silence"})); else playUtt(idx + 1);
+  }, byStop ? 8000 : 5000);
+}
+
+// --- free conversation: the agent's lines come from the LLM and are spoken by the browser ---------------------
+let free = false, voices = [], spokenChars = 0, cancelled = false, lastLine = false, sayText = "";
+
+// browser voices are only the fallback when the GPT voice fails
+function loadVoices() {
+  voices = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith("ar"));
+  const score = v => (v.lang === "ar-SA" ? 2 : 0) + (/natural|online/i.test(v.name) ? 1 : 0);
+  voices.sort((a, b) => score(b) - score(a));
+}
+
+// --- the agent's GPT voice, streamed from the server as pcm16 chunks and played back to back -----------------
+let stream = null;    // {speech, rate, text, sources, next, start, done, end}
+
+function beginStream(m) {
+  stopStream();
+  lastLine = false; sayText = m.text; spokenChars = 0; cancelled = false;
+  stream = {speech: m.speech, rate: m.rate, text: m.text || "", sources: [], next: 0, start: 0, done: false, end: false};
+  $("sentence").textContent = m.text || "…"; $("uttlabel").textContent = "agent · what the voice says";
+}
+
+function playChunk(buf) {
+  if (!stream || cancelled || !inCall) return;
+  const pcm = new Int16Array(buf), f = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) f[i] = pcm[i] / 32768;
+  const ab = ctx.createBuffer(1, f.length, stream.rate); ab.copyToChannel(f, 0);
+  const s = ctx.createBufferSource(); s.buffer = ab; s.connect(ctx.destination);
+  if (!stream.start) {                                  // first sound: the agent starts talking now
+    stream.start = stream.next = ctx.currentTime + 0.05;
+    ws.send(JSON.stringify({type: "agent_start", text: stream.text,
+                            duration_ms: Math.max(1500, Math.round(stream.text.split(/\s+/).length * 450))}));
+    speaking = true; setState("speaking"); clearTimeout(noReplyTimer);
+  }
+  s.start(stream.next); stream.next += ab.duration; stream.sources.push(s);
+  s.onended = () => { if (stream && stream.done && ctx.currentTime >= stream.next - 0.02 && speaking) {
+    spokenChars = stream.text.length; stopAgent(false); } };
+}
+
+function endStream(m) {
+  if (!stream || m.speech !== stream.speech) return;
+  if (m.text) { stream.text = m.text; if (speaking || !stream.start) $("sentence").textContent = m.text; }
+  stream.end = lastLine = !!m.end;
+  if (m.failed && !stream.start) { const t = stream.text, e = stream.end; stream = null; if (t) say(t, e); return; }
+  stream.done = true;
+  if (stream.start && ctx.currentTime >= stream.next - 0.02 && speaking) { spokenChars = stream.text.length; stopAgent(false); }
+}
+
+function streamSpokenChars() {        // how much of the line was heard before the STOP (by time, roughly)
+  if (!stream || !stream.start) return 0;
+  const est = Math.max(stream.next - stream.start, stream.text.split(/\s+/).length * 0.45);
+  return Math.round(stream.text.length * Math.min(1, Math.max(0, ctx.currentTime - stream.start) / est));
+}
+
+function stopStream() {
+  if (!stream) return;
+  for (const s of stream.sources) { try { s.onended = null; s.stop(); } catch (e) {} }
+  stream = null;
+}
+
+function say(text, end) {             // fallback: the browser's own Arabic voice
+  lastLine = !!end; sayText = text; spokenChars = 0; cancelled = false;
+  $("sentence").textContent = text; $("uttlabel").textContent = "agent · LLM reply (browser voice)";
+  const u = new SpeechSynthesisUtterance(text);
+  const v = voices[0]; if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "ar-SA";
+  u.onstart = () => {
+    if (!inCall) return;
+    ws.send(JSON.stringify({type: "agent_start", text, duration_ms: Math.round(text.split(/\s+/).length * 450)}));
+    speaking = true; setState("speaking");
+  };
+  u.onboundary = e => { spokenChars = e.charIndex; };
+  u.onend = u.onerror = () => { if (speaking && !cancelled) { spokenChars = text.length; stopAgent(false); } };
+  speechSynthesis.speak(u);
+}
+
+function tick() {
+  if (speaking && free && stream && stream.start)
+    $("prog").style.width = Math.min(100, (ctx.currentTime - stream.start) / Math.max(0.1, stream.next - stream.start) * 100) + "%";
+  else if (speaking && free && sayText) $("prog").style.width = Math.min(100, spokenChars / sayText.length * 100) + "%";
+  else if (speaking && playDur) $("prog").style.width = Math.min(100, (ctx.currentTime - playStart) / playDur * 100) + "%";
+  else if (!speaking) $("prog").style.width = "0";
+  requestAnimationFrame(tick);
+}
+
+async function startCall() {
+  await ensureAudio(); await ctx.resume();
+  free = $("mode").value === "free";
+  inCall = true; t0 = performance.now(); counts = {stop: 0, take: 0, dec: 0};
+  ["nstop", "ntake", "ndec"].forEach(id => $(id).textContent = "0");
+  $("start").disabled = true; $("hang").disabled = false; $("call").disabled = true; $("mode").disabled = true;
+  if (free) {
+    ws.send(JSON.stringify({type: "chat_start", scenario: $("scenario").value, voice: $("voice").value}));
+    setState("thinking"); $("sentence").textContent = "…";
+    return;
+  }
+  call = calls.find(c => c.id === $("call").value);
+  ws.send(JSON.stringify({type: "call_start", use_case: call.use_case}));
+  addRow("info", "", `call ${call.id} · ${call.use_case}`);
+  playUtt(0);
+}
+
+function endCall(reason) {
+  inCall = false; clearTimeout(noReplyTimer);
+  if (speaking) {
+    speaking = false;
+    if (free) { cancelled = true; speechSynthesis.cancel(); } else { try { src.stop(); } catch (e) {} }
+    ws.send(JSON.stringify({type: "agent_end"}));
+  }
+  stopStream();
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: "call_end"}));
+  $("mode").disabled = false;
+  setState("idle"); $("sentence").textContent = "—";
+  $("start").disabled = false; $("hang").disabled = true; $("call").disabled = false;
+  addRow("info", "", "call ended" + (reason ? ": " + reason : ""));
+}
+
+$("start").onclick = () => startCall().catch(e => addRow("error", "", String(e)));
+$("hang").onclick = () => endCall("hung up");
+$("clear").onclick = () => $("log").innerHTML = "";
+
+fetch("/calls").then(r => r.json()).then(list => {
+  calls = list;
+  $("call").innerHTML = list.map(c => `<option value="${c.id}">${c.id} · ${c.use_case} (${c.utterances.length} sentences)</option>`).join("");
+});
+function showMode() {
+  const f = $("mode").value === "free";
+  $("scenario").style.display = $("voice").style.display = f ? "" : "none";
+  $("call").style.display = f ? "none" : "";
+}
+$("mode").onchange = showMode; showMode();
+loadVoices(); speechSynthesis.onvoiceschanged = loadVoices;
+connect(); tick();
+</script>
+</body>
+</html>

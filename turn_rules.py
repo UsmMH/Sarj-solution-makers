@@ -38,6 +38,7 @@ def _words(s: str) -> frozenset:
 # --- word lists (written in natural spelling, normalised on load) -----------------------------------------------
 STOP_CUES = _words("""
     لحظة لحظات ثواني ثانية دقيقة استنى استنا استنوا انتظر انتظري وقف توقف قف
+    اصبر اصبري اصبروا
     اسمع اسمعني اسمعي اسمعيني بس عفوا سوري sorry wait stop pardon
 """)
 PREFIX_CUES = ("لحظ", "استن")            # a word still being said: «لحظ…», «استن…»
