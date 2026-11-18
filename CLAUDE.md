@@ -7,7 +7,7 @@ Nov 18 (Day 4). Code freeze and final submission: **Saturday Nov 21, 12:00** (mo
 - User: Usama, final-year Information Systems student at KSU, working with a small team (some non-technical). He wants to go **step by step**, and wants **full git commands** (`git add ...` + `git commit -m "..."`), never just a message. He runs on Windows / PowerShell, RTX 3060 Ti laptop.
 - Event: Sarj AI Human-Like Turn Taking Hackathon, Arabic phone-call agent. 5 teams. Our system decides, every 20 ms, whether the agent should STOP, RESUME or TAKE_TURN.
 - Final ranking = 80 % Core score on a **hidden Arabic stream (Day 6, Nov 20)** + 20 % judges (originality 10, practical applicability 5, clarity of demo 5). Day 6 also has an unscored live-microphone demo the judges watch.
-- Deadlines: **code freeze Day 5 (Nov 19) 18:00** (`python -m ttbench.ready` prints commit hash + service list); final Day 6. The Day 4 connection check is most likely not happening (user, Nov 18): don't plan around it, but still test the system on the venue network before Day 6.
+- Deadlines: **code freeze AND final submission Saturday Nov 21, 12:00** (moved from Nov 19/20; `python -m ttbench.ready` prints commit hash + service list). The connection check is most likely not happening (user, Nov 18): don't plan around it, but still test the system on the venue network before the final.
 - The Day 3 checkpoint did not happen as a test; mentors gave advice instead: no new data recording (augment the 24 calls), cloud APIs are allowed (they count in latency, must be declared).
 - Team name constant in `my_system.py` must stay: `TEAM = "Team 4 (for now :D)"`. Also keep `PEAK_DB = -20.0`.
 - Cost-conscious with OpenRouter: good models, but watch the price (key limit $1; ~$0.05 used by Nov 18).
@@ -110,6 +110,23 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
 ## Demo (`python demo.py`, open http://127.0.0.1:8780 in Edge/Chrome)
 - Runs the same `MySystem` on the browser microphone (raw: echo cancellation / AGC off; use headphones). Shows each Whisper decode, decision, reason and the gate lines live.
 - Modes: recorded dev call (real agent sentences) or **free conversation**: TAKE_TURN -> Whisper reads the whole turn -> **GPT-audio-mini writes AND speaks the reply in one streamed call** (OpenRouter, ~$0.001/reply, first audio ~1.3-2.2 s), transcript shown; STOP cuts the voice and cancels the stream. Fallback: Claude Haiku 5.5 text + browser voice. Two-step Haiku -> GPT-audio-mini reading was dropped: the voice model *answered* the text instead of reading it. Microsoft neural voices were rejected by the user (robotic).
+- **Night of Nov 18, demo rebuilt for speed** (scored system untouched): `.env` also holds `ELEVENLABS_API_KEY` (free tier,
+  10k chars/month; key needs TTS + STT access, Voices read) and `GEMINI_API_KEY` (free tier was overloaded/503: not used).
+  Page options (free call): **Your words** = ElevenLabs live `scribe_v3_live` (default; streamed while the caller talks,
+  committed at 0.3 s silence, final text in ~0.25 s, best accuracy) / batch Scribe v1 / local Whisper / Gemini via
+  OpenRouter. **Writer** = Haiku (default, natural) / Gemini 2.5 Flash-Lite (~0.3 s faster, sloppier). **Voice** =
+  ElevenLabs built-in Sarah/Chris with `eleven_v3_conversational` (first sound ~0.5 s; Voice Library Saudi voices need a
+  paid plan via API) / GPT-audio-mini voices (fallback). The writer streams sentences, ElevenLabs speaks each as it
+  arrives (v3 rejects `previous_text`: only the first piece was spoken until fixed). An early **draft** of the reply starts
+  at 0.3 s of caller silence and is thrown away if the caller makes a sound again. Each reply logs a "reply timing" line.
+  Measured: ~2.0-2.2 s of silence before the agent speaks with live Scribe (was ~3 s with GPT voice).
+  The page's 5 s "no reply" timer is ignored once the caller has spoken (it made the agent talk over a long turn).
+  On speakers, live Scribe also hears the agent: clauses of 4+ words that are >=70 % the agent's last line are dropped.
+- **Demo UI (Nov 19)**: judge-facing layout. Hero status (READY / AGENT SPEAKING / LISTENING / STOPPED / THINKING, EN+AR),
+  current agent sentence + the caller's live words, chat bubbles (live dashed bubble while the caller talks; cut-off agent
+  lines marked "you interrupted"; "replied after X s" badges), a 30 s turn-taking timeline (agent speech, caller level,
+  STOP / TAKE_TURN markers), call numbers. Settings and the engineer log (meter + table) are collapsed `<details>`.
+  Arabic inside English text goes in `<bdi dir="rtl">` (mixed() helper), or it renders scrambled.
 - Mic lesson: the Razer BlackShark V2 path had a noise gate (16-22 % exact digital silence, chopped words); the laptop mic had 0 %. For Day 6 use the laptop mic or a plain USB mic and test it on the demo machine.
 
 ## Write-up (WRITEUP.md, due by the freeze) must declare

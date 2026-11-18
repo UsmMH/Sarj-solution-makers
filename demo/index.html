@@ -3,48 +3,113 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Turn-Taking Live Demo</title>
+<title>Team 4 Turn-Taking</title>
 <style>
   :root {
-    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e2e0da;
-    --accent: #2f6fde; --stop: #d4402f; --take: #1f8a4c; --warn: #b7791f; --meter: #dcdad4;
+    --bg: #f4f3ef; --panel: #ffffff; --panel-2: #f9f8f5; --ink: #1c1c1a; --muted: #6a6964; --line: #e3e1da;
+    --accent: #2f6fde; --accent-soft: #e6eefc; --stop: #d23f2e; --stop-soft: #fbe9e6; --take: #1d8a4b;
+    --take-soft: #e3f4ea; --warn: #b3741a; --warn-soft: #faf0de; --meter: #e3e1da; --you: #1d8a4b; --you-soft: #e6f4eb;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.05);
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #161615; --panel: #212120; --ink: #ecebe7; --muted: #a09e98; --line: #34332f;
-            --accent: #6b9cf0; --stop: #ef6b5b; --take: #4cc184; --warn: #e0a84a; --meter: #3a3935; }
+    :root { --bg: #141413; --panel: #1f1f1d; --panel-2: #252523; --ink: #ecebe6; --muted: #a3a19a; --line: #34332f;
+            --accent: #6c9ef2; --accent-soft: #1f2a3f; --stop: #f07062; --stop-soft: #3a211d; --take: #4fc386;
+            --take-soft: #1b3326; --warn: #e3ab4f; --warn-soft: #3a2f1c; --meter: #3a3935; --you: #4fc386; --you-soft: #1d3125;
+            --shadow: none; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif; }
-  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  h1 { font-size: 20px; margin: 0; }
-  .pill { font-size: 12px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+         font: 15px/1.5 "Segoe UI", system-ui, -apple-system, Tahoma, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 18px 16px 48px; }
+  .ar { direction: rtl; unicode-bidi: plaintext; }
+
+  /* header */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo { width: 40px; height: 40px; border-radius: 12px; background: var(--accent); color: #fff; display: grid;
+          place-items: center; font-weight: 800; font-size: 18px; letter-spacing: -.02em; }
+  h1 { font-size: 19px; margin: 0; line-height: 1.2; }
+  .tagline { color: var(--muted); font-size: 13.5px; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
   .pill.ok { color: var(--take); border-color: var(--take); }
   .pill.bad { color: var(--stop); border-color: var(--stop); }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 14px; }
-  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  select, button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
-                   background: var(--panel); color: var(--ink); }
-  select { flex: 1; min-width: 220px; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  button:disabled { opacity: .45; }
-  .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
-  .agent { display: grid; grid-template-columns: 130px 1fr; gap: 14px; align-items: center; }
-  .state { text-align: center; font-weight: 700; letter-spacing: .04em; padding: 14px 6px; border-radius: 8px;
-           border: 2px solid var(--line); color: var(--muted); font-size: 14px; }
-  .state.speaking { border-color: var(--accent); color: var(--accent); }
-  .state.stopped { border-color: var(--stop); color: var(--stop); background: color-mix(in srgb, var(--stop) 10%, transparent); }
-  .state.listening { border-color: var(--take); color: var(--take); }
-  .state.thinking { border-color: var(--warn); color: var(--warn); }
-  textarea { width: 100%; font: inherit; font-size: 16px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
-             background: var(--panel); color: var(--ink); margin-bottom: 10px; resize: vertical; }
-  tr.you td.k { color: var(--accent); }
-  .sentence { font-size: 19px; line-height: 1.7; direction: rtl; text-align: right; min-height: 2em; }
-  .sentence .label { display: block; direction: ltr; text-align: left; font-size: 12px; color: var(--muted); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; box-shadow: var(--shadow); }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+
+  /* hero */
+  .hero { margin-top: 16px; display: grid; grid-template-columns: 200px 1fr auto; gap: 22px; align-items: center; }
+  .status { border-radius: 14px; padding: 16px 12px; text-align: center; border: 2px solid var(--line); background: var(--panel-2); }
+  .status .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--muted); margin: 0 auto 8px; }
+  .status .en { font-weight: 700; font-size: 15px; letter-spacing: .02em; }
+  .status .arl { font-size: 14px; color: var(--muted); margin-top: 2px; }
+  .status.speaking { border-color: var(--accent); background: var(--accent-soft); } .status.speaking .dot { background: var(--accent); animation: pulse 1s infinite; }
+  .status.listening { border-color: var(--take); background: var(--take-soft); } .status.listening .dot { background: var(--take); animation: pulse 1.6s infinite; }
+  .status.stopped { border-color: var(--stop); background: var(--stop-soft); } .status.stopped .dot { background: var(--stop); }
+  .status.thinking { border-color: var(--warn); background: var(--warn-soft); } .status.thinking .dot { background: var(--warn); animation: pulse .7s infinite; }
+  @keyframes pulse { 50% { transform: scale(1.5); opacity: .55; } }
+  .now .label { font-size: 12px; color: var(--muted); }
+  .sentence { font-size: 21px; line-height: 1.65; direction: rtl; text-align: right; min-height: 1.7em; }
   .progress { height: 4px; background: var(--meter); border-radius: 2px; margin-top: 8px; overflow: hidden; }
   .progress > div { height: 100%; width: 0; background: var(--accent); }
-  .meter { position: relative; height: 34px; background: var(--meter); border-radius: 6px; margin: 26px 0 22px; }
+  #livetext { font-size: 16px; color: var(--you); min-height: 1.5em; margin-top: 6px; direction: rtl; text-align: right; }
+  .actions { display: flex; flex-direction: column; gap: 10px; min-width: 150px; }
+  button { font: inherit; padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+           color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 650; font-size: 16px; padding: 12px 18px; }
+  button.danger { color: var(--stop); border-color: var(--stop); font-weight: 600; }
+  button:disabled { opacity: .4; cursor: default; }
+
+  /* main grid */
+  .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+  .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+  /* chat */
+  .chat { display: flex; flex-direction: column; gap: 10px; height: 470px; overflow-y: auto; padding: 4px 2px; }
+  .empty { color: var(--muted); text-align: center; margin: auto; max-width: 360px; font-size: 14px; }
+  .msg { max-width: 82%; padding: 10px 14px; border-radius: 16px; font-size: 16.5px; line-height: 1.6; direction: rtl;
+         text-align: right; position: relative; }
+  .msg .who { font-size: 11.5px; color: var(--muted); direction: ltr; text-align: left; margin-bottom: 2px; }
+  .msg.agent { align-self: flex-start; background: var(--accent-soft); border-bottom-left-radius: 4px; }
+  .msg.you { align-self: flex-end; background: var(--you-soft); border-bottom-right-radius: 4px; }
+  .msg.you.live { background: transparent; border: 1.5px dashed var(--you); color: var(--muted); }
+  .msg.cut { box-shadow: inset 0 0 0 1.5px var(--stop); }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; direction: ltr; justify-content: flex-start; }
+  .badge { font-size: 11.5px; padding: 1px 8px; border-radius: 99px; background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+  .badge.stop { color: var(--stop); border-color: var(--stop); }
+  .badge.fast { color: var(--take); border-color: var(--take); }
+  .event { align-self: center; font-size: 12.5px; color: var(--stop); background: var(--stop-soft); padding: 3px 12px;
+           border-radius: 99px; direction: ltr; }
+
+  /* timeline */
+  canvas { width: 100%; height: 150px; display: block; }
+  .tl-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+  /* numbers */
+  .numbers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .num { background: var(--panel-2); border-radius: 10px; padding: 10px; }
+  .num b { display: block; font-size: 22px; line-height: 1.2; }
+  .num span { font-size: 12px; color: var(--muted); }
+  .why { margin-top: 12px; font-size: 13.5px; color: var(--muted); }
+  .why b { color: var(--ink); }
+
+  /* settings + details */
+  details.card { margin-top: 16px; padding: 0; }
+  details.card > summary { cursor: pointer; padding: 14px 18px; font-weight: 600; list-style: none; display: flex;
+                           justify-content: space-between; align-items: center; }
+  details.card > summary::after { content: "▾"; color: var(--muted); }
+  details.card[open] > summary::after { content: "▴"; }
+  details.card > .inner { padding: 0 18px 18px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+  select, textarea { font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line);
+                     background: var(--panel); color: var(--ink); width: 100%; }
+  textarea { font-size: 15px; resize: vertical; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
+
+  /* engineer details (unchanged logic) */
+  .meter { position: relative; height: 30px; background: var(--meter); border-radius: 6px; margin: 26px 0 22px; }
   .meter .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 6px; background: var(--accent);
                 transition: width 80ms linear; opacity: .8; }
   .mark { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--ink); display: none; }
@@ -53,91 +118,163 @@
   .mark.ref { background: var(--take); } .mark.r6 { background: var(--warn); } .mark.r12 { background: var(--stop); }
   .legend { font-size: 12px; color: var(--muted); }
   .stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
-  .stats b { color: var(--ink); font-size: 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .stats b { color: var(--ink); font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td { padding: 6px 6px; border-top: 1px solid var(--line); vertical-align: top; }
   td.t { color: var(--muted); white-space: nowrap; width: 54px; }
   td.k { white-space: nowrap; width: 86px; font-weight: 600; }
-  td.ar { direction: rtl; text-align: right; font-size: 15px; }
-  td.why { color: var(--muted); width: 38%; }
-  tr.stop td.k, tr.stop td.why { color: var(--stop); }
+  td.arc { direction: rtl; text-align: right; font-size: 14.5px; }
+  td.whyc { color: var(--muted); width: 38%; }
+  tr.stop td.k, tr.stop td.whyc { color: var(--stop); }
   tr.take td.k { color: var(--take); }
+  tr.you td.k { color: var(--you); }
   tr.big td { font-weight: 700; }
-  .log { max-height: 420px; overflow: auto; }
-  @media (max-width: 640px) { .agent { grid-template-columns: 1fr; } td.why { width: auto; } }
+  .log { max-height: 380px; overflow: auto; margin-top: 10px; }
+
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: 1fr; }
+    .actions { flex-direction: row; } .actions button { flex: 1; }
+    .grid { grid-template-columns: 1fr; }
+    .chat { height: 380px; }
+  }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>Team 4 · live turn-taking demo</h1>
+    <div class="brand">
+      <div class="logo">T4</div>
+      <div>
+        <h1>Team 4 · Arabic turn-taking agent</h1>
+        <div class="tagline"><span class="ar">وكيل اتصال يعرف متى يسكت ومتى يتكلم</span> · knows when to stop, when to listen, when to speak</div>
+      </div>
+    </div>
     <span id="conn" class="pill">connecting…</span>
   </header>
 
-  <section class="panel">
-    <div class="row" style="margin-bottom:10px">
-      <select id="mode" style="flex:0 1 auto;min-width:0">
-        <option value="free">Free conversation (LLM agent, Arabic voice)</option>
-        <option value="dev">Recorded call (dev agent sentences)</option>
-      </select>
-      <select id="audio" style="flex:0 1 auto;min-width:0" title="How you listen to the agent">
-        <option value="speakers">Listening on speakers (echo cancellation on)</option>
-        <option value="headphones">Listening on headphones (raw mic, best for Whisper)</option>
-      </select>
-      <select id="voice" style="min-width:180px" title="Agent voice (GPT-audio-mini, Saudi accent)">
-        <option value="shimmer">Voice: Shimmer (female)</option>
-        <option value="ash">Voice: Ash (male)</option>
-        <option value="coral">Voice: Coral (female)</option>
-        <option value="sage">Voice: Sage (female)</option>
-        <option value="ballad">Voice: Ballad (male)</option>
-        <option value="verse">Voice: Verse (male)</option>
-        <option value="alloy">Voice: Alloy</option>
-        <option value="echo">Voice: Echo (male)</option>
-      </select>
+  <!-- hero: what is happening right now -->
+  <section class="card hero">
+    <div id="state" class="status idle"><div class="dot"></div><div class="en" id="stateEn">READY</div><div class="arl ar" id="stateAr">جاهز</div></div>
+    <div class="now">
+      <div class="label" id="uttlabel">agent</div>
+      <div class="sentence" id="sentence">—</div>
+      <div class="progress"><div id="prog"></div></div>
+      <div id="livetext"></div>
     </div>
-    <textarea id="scenario" rows="2" dir="rtl" placeholder="سيناريو المكالمة (فاضي = تذكير بموعد عيادة أسنان)"></textarea>
-    <div class="row">
-      <select id="call"></select>
+    <div class="actions">
       <button id="start" class="primary" disabled>Start call</button>
-      <button id="hang" disabled>Hang up</button>
+      <button id="hang" class="danger" disabled>Hang up</button>
     </div>
-    <div class="hint">Choose speakers or headphones above (on speakers the browser removes the agent's own voice from the mic). Interrupt the agent («لحظة», «لا لا», a question…) or just say «إيه» and see if it keeps talking.
-      When you finish speaking, the agent takes its turn and goes on.</div>
   </section>
 
-  <section class="panel">
-    <div class="agent">
-      <div id="state" class="state">IDLE</div>
-      <div>
-        <div class="sentence"><span class="label" id="uttlabel">agent</span><span id="sentence">—</span></div>
-        <div class="progress"><div id="prog"></div></div>
+  <div class="grid">
+    <!-- the conversation -->
+    <section class="card">
+      <h2>Conversation</h2>
+      <div class="chat" id="chat">
+        <div class="empty" id="empty">Press <b>Start call</b>: the agent calls you.<br>
+          Talk over it and it stops: <bdi dir="rtl">«لحظة»</bdi> · <bdi dir="rtl">«لا لا»</bdi> · a question.<br>
+          Say <bdi dir="rtl">«إيه»</bdi> and it keeps going. Finish your sentence and it answers.</div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="panel">
-    <div class="legend">Your microphone level (dBFS). Lines: <span style="color:var(--take)">your voice</span> (loudest so far this call) ·
-      <span style="color:var(--warn)">−6 dB</span>: quieter needs a clear cue · <span style="color:var(--stop)">−12 dB</span>: quieter is ignored (TV, echo)</div>
-    <div class="meter" id="meter">
-      <div class="bar" id="bar"></div>
-      <div class="mark top" id="mfloor" style="background:var(--muted)"><span>noise floor</span></div>
-      <div class="mark top ref" id="mref"><span>your voice</span></div>
-      <div class="mark bottom r6" id="mr6"><span>−6</span></div>
-      <div class="mark bottom r12" id="mr12"><span>−12</span></div>
-    </div>
-    <div class="stats">
-      <div>STOP <b id="nstop">0</b></div>
-      <div>TAKE_TURN <b id="ntake">0</b></div>
-      <div>Whisper decodes <b id="ndec">0</b></div>
-      <div>last decode <b id="lastms">–</b></div>
-    </div>
-  </section>
+    <div class="side">
+      <!-- the turn-taking decisions, over time -->
+      <section class="card">
+        <h2>Turn-taking, last 30 seconds</h2>
+        <canvas id="tl" width="600" height="150"></canvas>
+        <div class="tl-legend">
+          <span><i class="sw" style="background:var(--accent)"></i>agent speaking</span>
+          <span><i class="sw" style="background:var(--you)"></i>your voice</span>
+          <span><i class="sw" style="background:var(--stop)"></i>STOP</span>
+          <span><i class="sw" style="background:var(--take)"></i>TAKE_TURN</span>
+        </div>
+      </section>
 
-  <section class="panel">
-    <div class="row" style="justify-content:space-between"><b>What the system heard and decided</b>
-      <button id="clear">Clear</button></div>
-    <div class="log"><table><tbody id="log"></tbody></table></div>
-  </section>
+      <section class="card">
+        <h2>This call</h2>
+        <div class="numbers">
+          <div class="num"><b id="kStops">0</b><span>interruptions handled</span></div>
+          <div class="num"><b id="kKept">0</b><span>backchannels ignored</span></div>
+          <div class="num"><b id="kReply">–</b><span>last reply after silence</span></div>
+        </div>
+        <div class="why" id="why">Every 20 ms our engine decides: keep talking, <b>STOP</b>, or <b>TAKE_TURN</b>. Local Whisper + Arabic rules, no cloud in the decision.</div>
+      </section>
+    </div>
+  </div>
+
+  <!-- settings -->
+  <details class="card" id="settings">
+    <summary>Settings</summary>
+    <div class="inner">
+      <div class="fields">
+        <label class="f">Mode
+          <select id="mode">
+            <option value="free">Free conversation (LLM agent, Arabic voice)</option>
+            <option value="dev">Recorded call (dev agent sentences)</option>
+          </select></label>
+        <label class="f">How you listen
+          <select id="audio">
+            <option value="speakers">Speakers (echo cancellation on)</option>
+            <option value="headphones">Headphones (raw mic, cleanest)</option>
+          </select></label>
+        <label class="f free-only">Your words
+          <select id="stt">
+            <option value="live">ElevenLabs live (best and fastest)</option>
+            <option value="scribe">ElevenLabs Scribe (batch, +~1 s)</option>
+            <option value="local">Local Whisper (offline)</option>
+            <option value="cloud">Gemini via OpenRouter (+~2 s)</option>
+          </select></label>
+        <label class="f free-only">Writer
+          <select id="writer">
+            <option value="haiku">Claude Haiku (more natural)</option>
+            <option value="flash-lite">Gemini Flash-Lite (~0.3 s faster)</option>
+          </select></label>
+        <label class="f free-only">Voice
+          <select id="voice">
+            <option value="eleven-sarah">ElevenLabs Sarah (female, fastest)</option>
+            <option value="eleven-chris">ElevenLabs Chris (male, fastest)</option>
+            <option value="shimmer">GPT Shimmer (female)</option>
+            <option value="ash">GPT Ash (male)</option>
+            <option value="coral">GPT Coral (female)</option>
+            <option value="sage">GPT Sage (female)</option>
+            <option value="ballad">GPT Ballad (male)</option>
+            <option value="verse">GPT Verse (male)</option>
+            <option value="alloy">GPT Alloy</option>
+            <option value="echo">GPT Echo (male)</option>
+          </select></label>
+        <label class="f dev-only">Recorded call
+          <select id="call"></select></label>
+      </div>
+      <label class="f free-only" style="margin-top:12px">Scenario (empty = dental clinic reminder)
+        <textarea id="scenario" rows="2" dir="rtl" placeholder="مثال: عيادة النخبة تذكّر العميل بموعده يوم الأحد الساعة عشرة الصبح"></textarea></label>
+      <div class="hint">Speakers: the browser removes the agent's own voice from the mic (for watching together). Headphones: the cleanest audio, best for one person.</div>
+    </div>
+  </details>
+
+  <!-- engineer view -->
+  <details class="card" id="details">
+    <summary>Engineer details: what the system heard and decided</summary>
+    <div class="inner">
+      <div class="legend">Your microphone level (dBFS). Lines: <span style="color:var(--take)">your voice</span> (loudest so far this call) ·
+        <span style="color:var(--warn)">−6 dB</span>: quieter needs a clear cue · <span style="color:var(--stop)">−12 dB</span>: quieter is ignored (TV, echo)</div>
+      <div class="meter" id="meter">
+        <div class="bar" id="bar"></div>
+        <div class="mark top" id="mfloor" style="background:var(--muted)"><span>noise floor</span></div>
+        <div class="mark top ref" id="mref"><span>your voice</span></div>
+        <div class="mark bottom r6" id="mr6"><span>−6</span></div>
+        <div class="mark bottom r12" id="mr12"><span>−12</span></div>
+      </div>
+      <div class="stats">
+        <div>STOP <b id="nstop">0</b></div>
+        <div>TAKE_TURN <b id="ntake">0</b></div>
+        <div>Whisper decodes <b id="ndec">0</b></div>
+        <div>last decode <b id="lastms">–</b></div>
+        <button id="clear" style="margin-left:auto">Clear log</button>
+      </div>
+      <div class="log"><table><tbody id="log"></tbody></table></div>
+    </div>
+  </details>
 </main>
 
 <script>
@@ -149,16 +286,118 @@ let t0 = 0, playStart = 0, playDur = 0, noReplyTimer = null, counts = {stop: 0, 
 function pct(db) { return Math.max(0, Math.min(100, (db - MIN_DB) / (MAX_DB - MIN_DB) * 100)); }
 function now() { return ((performance.now() - t0) / 1000).toFixed(1); }
 
+// --- status -------------------------------------------------------------------------------------------------
+const STATES = {
+  idle: ["READY", "جاهز"], speaking: ["AGENT SPEAKING", "الوكيل يتكلم"], listening: ["LISTENING", "يسمعك"],
+  stopped: ["STOPPED · YOUR TURN", "سكت، تفضّل"], thinking: ["THINKING", "يجهّز الرد"],
+};
 function setState(s) {
-  const el = $("state");
-  el.className = "state " + s.toLowerCase();
-  el.textContent = s === "stopped" ? "STOPPED" : s.toUpperCase();
+  s = s.toLowerCase();
+  $("state").className = "status " + s;
+  const [en, ar] = STATES[s] || STATES.idle;
+  $("stateEn").textContent = en; $("stateAr").textContent = ar;
 }
 
+// --- the conversation as bubbles ----------------------------------------------------------------------------
+let agentBubble = null, liveBubble = null, kept = 0, lastStop = null;   // lastStop = {reason, cue, heard}
+function bubble(who, text, cls) {
+  $("empty") && $("empty").remove();
+  const d = document.createElement("div");
+  d.className = `msg ${who}${cls ? " " + cls : ""}`;
+  d.innerHTML = `<div class="who"></div><div class="txt"></div><div class="badges"></div>`;
+  d.querySelector(".who").textContent = who === "agent" ? "Agent" : "You";
+  d.querySelector(".txt").textContent = text || "…";
+  $("chat").append(d); $("chat").scrollTop = $("chat").scrollHeight;
+  return d;
+}
+function setText(b, text) { if (b) { b.querySelector(".txt").textContent = text; $("chat").scrollTop = $("chat").scrollHeight; } }
+function addBadge(b, text, cls) {
+  if (!b) return;
+  const s = document.createElement("span"); s.className = "badge" + (cls ? " " + cls : ""); s.textContent = text;
+  b.querySelector(".badges").append(s);
+}
+// text pieces: plain strings stay as they are, {ar: "…"} pieces sit in their own right-to-left <bdi>
+function mixed(el, pieces) {
+  el.textContent = "";
+  for (const p of pieces) {
+    if (typeof p === "string") el.append(p);
+    else { const b = document.createElement("bdi"); b.dir = "rtl"; b.textContent = p.ar; el.append(b); }
+  }
+  return el;
+}
+function chatEvent(pieces) {
+  $("empty") && $("empty").remove();
+  const e = mixed(Object.assign(document.createElement("div"), {className: "event"}), [].concat(pieces));
+  $("chat").append(e); $("chat").scrollTop = $("chat").scrollHeight;
+}
+function stopPieces() {
+  return lastStop ? [`STOP · ${lastStop.reason.replace(/«.*»/, "").trim()} `, ...(lastStop.cue ? [{ar: lastStop.cue}] : []),
+                     " · heard ", {ar: lastStop.heard}] : ["STOP · you took the floor"];
+}
+function startAgentBubble(text) { agentBubble = bubble("agent", text || "…"); }
+function onLivePartial(text) {
+  $("livetext").textContent = text ? "أنت: " + text : "";
+  if (!text) return;
+  if (!liveBubble) liveBubble = bubble("you", text, "live");
+  else setText(liveBubble, text);
+}
+function onCallerTurn(text, source) {
+  if (liveBubble) { liveBubble.classList.remove("live"); setText(liveBubble, text); }
+  else liveBubble = bubble("you", text);
+  const short = /live/i.test(source || "") ? "live transcription" : /Scribe/.test(source || "") ? "Scribe" :
+                /Whisper/.test(source || "") ? "Whisper" : (source || "").split(",")[0];
+  addBadge(liveBubble, short);
+  liveBubble = null; $("livetext").textContent = "";
+}
+
+// --- the timeline (last 30 s) ---------------------------------------------------------------------------------
+const WINDOW_S = 30;
+let levels = [], agentSegs = [], markers = [];
+function tnow() { return performance.now() / 1000; }
+function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function drawTimeline() {
+  const c = $("tl"), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const T = tnow(), x = t => (1 - (T - t) / WINDOW_S) * (w - 54) + 54;
+  const laneA = [22, 46], laneY = [78, 130];
+  g.font = "12px Segoe UI, system-ui, sans-serif"; g.fillStyle = cssVar("--muted");
+  g.fillText("Agent", 0, 38); g.fillText("You", 0, 108);
+  g.strokeStyle = cssVar("--line"); g.lineWidth = 1;
+  for (let s = 0; s <= WINDOW_S; s += 5) { const xx = x(T - s); g.beginPath(); g.moveTo(xx, 14); g.lineTo(xx, h - 4); g.stroke(); }
+  g.fillStyle = cssVar("--accent");
+  for (const sg of agentSegs) {
+    const e = sg.e ?? T; if (e < T - WINDOW_S) continue;
+    const a = Math.max(x(sg.s), 54), b = x(e); g.globalAlpha = .85;
+    g.beginPath(); g.roundRect ? g.roundRect(a, laneA[0], Math.max(2, b - a), laneA[1] - laneA[0], 5) : g.rect(a, laneA[0], b - a, laneA[1] - laneA[0]); g.fill();
+  }
+  g.globalAlpha = 1; g.fillStyle = cssVar("--you");
+  for (const p of levels) {
+    if (p.t < T - WINDOW_S) continue;
+    const v = Math.max(0, Math.min(1, (p.db - (p.floor ?? -70) - 3) / 35));
+    const mid = (laneY[0] + laneY[1]) / 2, hh = v * (laneY[1] - laneY[0]) / 2;
+    g.fillRect(x(p.t) - 1, mid - hh, 2.5, Math.max(1, hh * 2));
+  }
+  for (const m of markers) {
+    if (m.t < T - WINDOW_S) continue;
+    const xx = x(m.t), col = m.kind === "STOP" ? cssVar("--stop") : cssVar("--take");
+    g.strokeStyle = col; g.lineWidth = 2; g.beginPath(); g.moveTo(xx, 12); g.lineTo(xx, h - 4); g.stroke();
+    g.fillStyle = col; g.font = "600 11px Segoe UI, system-ui, sans-serif";
+    const label = m.kind === "STOP" ? "STOP" : "TAKE";
+    g.fillText(label, Math.min(xx + 3, w - 34), 11);
+  }
+  levels = levels.filter(p => p.t > T - WINDOW_S - 1);
+  markers = markers.filter(m => m.t > T - WINDOW_S - 1);
+  agentSegs = agentSegs.filter(s => (s.e ?? T) > T - WINDOW_S - 1);
+}
+function agentOn() { if (!agentSegs.length || agentSegs[agentSegs.length - 1].e != null) agentSegs.push({s: tnow(), e: null}); }
+function agentOff() { if (agentSegs.length && agentSegs[agentSegs.length - 1].e == null) agentSegs[agentSegs.length - 1].e = tnow(); }
+
+// --- engineer log ---------------------------------------------------------------------------------------------
 function addRow(kind, ar, why, cls) {
   const tr = document.createElement("tr");
   if (cls) tr.className = cls;
-  tr.innerHTML = `<td class="t">${inCall ? now() + "s" : ""}</td><td class="k"></td><td class="ar"></td><td class="why"></td>`;
+  tr.innerHTML = `<td class="t">${inCall ? now() + "s" : ""}</td><td class="k"></td><td class="arc"></td><td class="whyc"></td>`;
   tr.children[1].textContent = kind; tr.children[2].textContent = ar || "";
   // why = a string, or a list of pieces; each piece sits in its own <bdi> so Arabic never scrambles the English
   for (const [i, piece] of (Array.isArray(why) ? why : [why || ""]).entries()) {
@@ -180,16 +419,30 @@ function onLog(line, shadow) {
   const why = [shadow ? `ours would: ${decision}` : decision, m[6]];
   if (vs) why.push(vs[1] === "n/a" ? "no reference voice yet" : `${vs[1]} dB vs your voice`);
   addRow(kind, m[4], why, decision === "STOP" && !shadow ? "stop" : "");
+  if (!shadow && m[1] === "asr" && decision === "STOP")
+    lastStop = {reason: m[6], cue: (m[6].match(/«(.*)»/) || [])[1] || "", heard: m[4]};
+  // a backchannel or noise while the agent talks, correctly ignored (counted once per burst)
+  if (!shadow && m[1] === "asr" && decision === "keep" && speaking && /acknowledgement|stock phrase|far quieter|echo/.test(m[6])) {
+    const burst = (line.match(/burst (\d+)/) || [])[1];
+    if (burst && burst !== onLog.lastKeptBurst) { onLog.lastKeptBurst = burst; kept++; $("kKept").textContent = kept; }
+  }
 }
 
 function onDecision(d) {
   if (d === "STOP") {
-    counts.stop++; $("nstop").textContent = counts.stop;
+    counts.stop++; $("nstop").textContent = counts.stop; $("kStops").textContent = counts.stop;
     addRow("STOP", "", "agent goes silent: you have the floor", "stop big");
-    if (speaking) stopAgent(true);
+    markers.push({t: tnow(), kind: "STOP"});
+    if (speaking) {
+      if (agentBubble) { agentBubble.classList.add("cut"); addBadge(agentBubble, "✋ you interrupted", "stop"); }
+      chatEvent(stopPieces());
+      mixed($("why"), ["Last ", ...stopPieces()]);
+      stopAgent(true);
+    }
   } else if (d === "TAKE_TURN") {
     counts.take++; $("ntake").textContent = counts.take;
     addRow("TAKE_TURN", "", "you finished: the agent continues", "take big");
+    markers.push({t: tnow(), kind: "TAKE_TURN"});
     clearTimeout(noReplyTimer);
     if (!speaking && inCall && !free) setTimeout(() => playUtt(idx + 1), 250);   // free mode: the server replies
   } else if (d === "RESUME") {
@@ -209,6 +462,17 @@ function onLevel(m) {
   setMark("mref", m.ref, m.ref != null);
   setMark("mr6", m.ref == null ? null : m.ref - 6, m.ref != null);
   setMark("mr12", m.ref == null ? null : m.ref - 12, m.ref != null);
+  if (inCall) levels.push({t: tnow(), db: m.db, floor: m.floor});
+}
+
+function onInfo(text) {
+  addRow("info", "", text);
+  const m = text.match(/= (\d+) ms of silence/);            // "reply timing: … = 2104 ms of silence"
+  if (m) {
+    const s = (+m[1] / 1000).toFixed(1);
+    $("kReply").textContent = s + " s";
+    addBadge(agentBubble, `replied after ${s} s`, +m[1] <= 2200 ? "fast" : "");
+  }
 }
 
 function connect() {
@@ -223,11 +487,12 @@ function connect() {
     if (m.type === "log") onLog(m.line, m.shadow);
     else if (m.type === "decision") onDecision(m.decision);
     else if (m.type === "level") onLevel(m);
-    else if (m.type === "info") addRow("info", "", m.text);
+    else if (m.type === "info") onInfo(m.text);
     else if (m.type === "agent_say") { if (inCall) (m.audio === "stream" ? beginStream(m) : say(m.text, m.end)); }
     else if (m.type === "agent_audio_end") endStream(m);
-    else if (m.type === "agent_text") { if (stream && m.speech === stream.speech) { stream.text = m.text; $("sentence").textContent = m.text; } }
-    else if (m.type === "caller_turn") addRow("you said", m.text, "your whole turn, as the LLM reads it", "you");
+    else if (m.type === "live_partial") onLivePartial(m.text);
+    else if (m.type === "agent_text") { if (stream && m.speech === stream.speech) { stream.text = m.text; $("sentence").textContent = m.text; setText(agentBubble, m.text); } }
+    else if (m.type === "caller_turn") { addRow("you said", m.text, ["your whole turn, as the agent reads it", m.source || "Whisper"], "you"); onCallerTurn(m.text, m.source); }
     else if (m.type === "thinking") { if (m.on && inCall && !speaking) setState("thinking"); }
   };
 }
@@ -287,14 +552,14 @@ async function playUtt(i) {
   src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
   playDur = buf.duration; playStart = ctx.currentTime;
   ws.send(JSON.stringify({type: "agent_start", text: u.text, duration_ms: Math.round(buf.duration * 1000)}));
-  speaking = true; setState("speaking");
+  speaking = true; setState("speaking"); agentOn(); startAgentBubble(u.text);
   src.onended = () => { if (speaking) stopAgent(false); };
   src.start();
 }
 
 function stopAgent(byStop) {
   if (free && stream && byStop) spokenChars = streamSpokenChars();
-  speaking = false;
+  speaking = false; agentOff();
   if (free) { cancelled = true; speechSynthesis.cancel(); stopStream(); }
   else { try { src && src.stop(); } catch (e) {} }
   ws.send(JSON.stringify({type: "agent_end", spoken_chars: free ? spokenChars : null}));
@@ -312,14 +577,14 @@ function stopAgent(byStop) {
 // --- free conversation: the agent's lines come from the LLM and are spoken by the browser ---------------------
 let free = false, voices = [], spokenChars = 0, cancelled = false, lastLine = false, sayText = "";
 
-// browser voices are only the fallback when the GPT voice fails
+// browser voices are only the fallback when the cloud voices fail
 function loadVoices() {
   voices = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith("ar"));
   const score = v => (v.lang === "ar-SA" ? 2 : 0) + (/natural|online/i.test(v.name) ? 1 : 0);
   voices.sort((a, b) => score(b) - score(a));
 }
 
-// --- the agent's GPT voice, streamed from the server as pcm16 chunks and played back to back -----------------
+// --- the agent's voice, streamed from the server as pcm16 chunks and played back to back --------------------
 let stream = null;    // {speech, rate, text, sources, next, start, done, end}
 
 function beginStream(m) {
@@ -327,6 +592,7 @@ function beginStream(m) {
   lastLine = false; sayText = m.text; spokenChars = 0; cancelled = false;
   stream = {speech: m.speech, rate: m.rate, text: m.text || "", sources: [], next: 0, start: 0, done: false, end: false};
   $("sentence").textContent = m.text || "…"; $("uttlabel").textContent = "agent · what the voice says";
+  startAgentBubble(m.text || "…");
 }
 
 function playChunk(buf) {
@@ -339,7 +605,7 @@ function playChunk(buf) {
     stream.start = stream.next = ctx.currentTime + 0.05;
     ws.send(JSON.stringify({type: "agent_start", text: stream.text,
                             duration_ms: Math.max(1500, Math.round(stream.text.split(/\s+/).length * 450))}));
-    speaking = true; setState("speaking"); clearTimeout(noReplyTimer);
+    speaking = true; setState("speaking"); agentOn(); clearTimeout(noReplyTimer);
   }
   s.start(stream.next); stream.next += ab.duration; stream.sources.push(s);
   s.onended = () => { if (stream && stream.done && ctx.currentTime >= stream.next - 0.02 && speaking) {
@@ -348,7 +614,7 @@ function playChunk(buf) {
 
 function endStream(m) {
   if (!stream || m.speech !== stream.speech) return;
-  if (m.text) { stream.text = m.text; if (speaking || !stream.start) $("sentence").textContent = m.text; }
+  if (m.text) { stream.text = m.text; if (speaking || !stream.start) { $("sentence").textContent = m.text; setText(agentBubble, m.text); } }
   stream.end = lastLine = !!m.end;
   if (m.failed && !stream.start) { const t = stream.text, e = stream.end; stream = null; if (t) say(t, e); return; }
   stream.done = true;
@@ -370,12 +636,13 @@ function stopStream() {
 function say(text, end) {             // fallback: the browser's own Arabic voice
   lastLine = !!end; sayText = text; spokenChars = 0; cancelled = false;
   $("sentence").textContent = text; $("uttlabel").textContent = "agent · LLM reply (browser voice)";
+  if (!agentBubble || agentBubble.querySelector(".txt").textContent !== text) startAgentBubble(text);
   const u = new SpeechSynthesisUtterance(text);
   const v = voices[0]; if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "ar-SA";
   u.onstart = () => {
     if (!inCall) return;
     ws.send(JSON.stringify({type: "agent_start", text, duration_ms: Math.round(text.split(/\s+/).length * 450)}));
-    speaking = true; setState("speaking");
+    speaking = true; setState("speaking"); agentOn();
   };
   u.onboundary = e => { spokenChars = e.charIndex; };
   u.onend = u.onerror = () => { if (speaking && !cancelled) { spokenChars = text.length; stopAgent(false); } };
@@ -388,18 +655,22 @@ function tick() {
   else if (speaking && free && sayText) $("prog").style.width = Math.min(100, spokenChars / sayText.length * 100) + "%";
   else if (speaking && playDur) $("prog").style.width = Math.min(100, (ctx.currentTime - playStart) / playDur * 100) + "%";
   else if (!speaking) $("prog").style.width = "0";
+  if (!tick.n || performance.now() - tick.n > 60) { tick.n = performance.now(); drawTimeline(); }
   requestAnimationFrame(tick);
 }
 
 async function startCall() {
   await ensureAudio(); await ctx.resume();
   free = $("mode").value === "free";
-  inCall = true; t0 = performance.now(); counts = {stop: 0, take: 0, dec: 0};
-  ["nstop", "ntake", "ndec"].forEach(id => $(id).textContent = "0");
-  $("start").disabled = true; $("hang").disabled = false; $("call").disabled = true; $("mode").disabled = true;
-  $("audio").disabled = true;
+  inCall = true; t0 = performance.now(); counts = {stop: 0, take: 0, dec: 0}; kept = 0;
+  ["nstop", "ntake", "ndec", "kStops", "kKept"].forEach(id => $(id).textContent = "0");
+  $("kReply").textContent = "–";
+  $("chat").innerHTML = ""; agentBubble = liveBubble = null; levels = []; markers = []; agentSegs = [];
+  $("start").disabled = true; $("hang").disabled = false; $("settings").open = false;
+  for (const id of ["call", "mode", "audio", "stt", "writer", "voice", "scenario"]) $(id).disabled = true;
   if (free) {
-    ws.send(JSON.stringify({type: "chat_start", scenario: $("scenario").value, voice: $("voice").value}));
+    ws.send(JSON.stringify({type: "chat_start", scenario: $("scenario").value, voice: $("voice").value, stt: $("stt").value,
+                            writer: $("writer").value}));
     setState("thinking"); $("sentence").textContent = "…";
     return;
   }
@@ -416,11 +687,12 @@ function endCall(reason) {
     if (free) { cancelled = true; speechSynthesis.cancel(); } else { try { src.stop(); } catch (e) {} }
     ws.send(JSON.stringify({type: "agent_end"}));
   }
-  stopStream();
+  agentOff(); stopStream();
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: "call_end"}));
-  $("mode").disabled = false; $("audio").disabled = false;
-  setState("idle"); $("sentence").textContent = "—";
-  $("start").disabled = false; $("hang").disabled = true; $("call").disabled = false;
+  for (const id of ["call", "mode", "audio", "stt", "writer", "voice", "scenario"]) $(id).disabled = false;
+  setState("idle"); $("sentence").textContent = "—"; $("livetext").textContent = "";
+  $("start").disabled = false; $("hang").disabled = true;
+  chatEvent("call ended" + (reason ? ": " + reason : ""));
   addRow("info", "", "call ended" + (reason ? ": " + reason : ""));
 }
 
@@ -434,8 +706,8 @@ fetch("/calls").then(r => r.json()).then(list => {
 });
 function showMode() {
   const f = $("mode").value === "free";
-  $("scenario").style.display = $("voice").style.display = f ? "" : "none";
-  $("call").style.display = f ? "none" : "";
+  document.querySelectorAll(".free-only").forEach(el => el.style.display = f ? "" : "none");
+  document.querySelectorAll(".dev-only").forEach(el => el.style.display = f ? "none" : "");
 }
 $("mode").onchange = showMode; showMode();
 $("audio").onchange = () => { if (ctx && !inCall) openMic($("audio").value).catch(e => addRow("error", "", String(e))); };

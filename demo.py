@@ -19,7 +19,9 @@ import http.client
 import io
 import json
 import os
+import queue as sentence_queue                          # "queue" is the page-message queue inside handler()
 import re
+import threading
 import time
 import wave
 from pathlib import Path
@@ -33,7 +35,7 @@ from difflib import SequenceMatcher
 
 import my_system
 from llm_judge import _read_key
-from turn_rules import normalize
+from turn_rules import _close, normalize, tokens
 from my_system import ASR, FLOOR_PERCENTILE, LOUD_DB, MySystem, loudness_db
 from ttbench.dataset import read_wav_stereo
 
@@ -228,13 +230,318 @@ def voice_stream(messages, voice, on_chunk, on_text, cancelled):
             c.close()
 
 
+# Optional cloud transcription of the caller's FINISHED turn (demo only; the fast STOP decisions stay on local Whisper).
+# Tested Nov 18 on a noisy-room call: Gemini 3.7 Flash cut its answers off (its hidden reasoning used the token budget);
+# Gemini 2.5 Flash without reasoning: complete text in ~2 s for ~$0.00016 a turn. Qwen 3.8 omni added unsaid sentences.
+STT_MODEL = os.environ.get("DEMO_STT_MODEL", "google/gemini-2.5-flash")
+STT_TIMEOUT_S = 6.0
+STT_PROMPT = ("Transcribe this Arabic phone audio (Saudi / Gulf dialect) exactly as spoken, in Arabic script. It may "
+              "start or end mid-word. Output only the transcript. If there is no speech, output nothing.")
+
+
+def cloud_transcribe(audio):
+    """-> (text, ms, error). Blocking: run it in a thread. audio = float32 at 16 kHz."""
+    key = _read_key()
+    if not key:
+        return "", 0, "no OPENROUTER_API_KEY (.env)"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(SR)
+        w.writeframes((np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
+    body = json.dumps({"model": STT_MODEL, "temperature": 0, "max_tokens": 300, "reasoning": {"enabled": False},
+                       "messages": [{"role": "user", "content": [
+                           {"type": "text", "text": STT_PROMPT},
+                           {"type": "input_audio", "input_audio": {"data": base64.b64encode(buf.getvalue()).decode(),
+                                                                   "format": "wav"}}]}]}).encode()
+    t0 = time.perf_counter()
+    try:
+        c = http.client.HTTPSConnection("openrouter.ai", timeout=STT_TIMEOUT_S)
+        c.request("POST", "/api/v1/chat/completions", body,
+                  {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "X-Title": "turn-taking demo"})
+        r = c.getresponse()
+        d = json.loads(r.read())
+        ms = (time.perf_counter() - t0) * 1000
+        if r.status != 200:
+            return "", ms, f"cloud STT error {r.status}: {str(d.get('error', d))[:100]}"
+        return (d["choices"][0]["message"].get("content") or "").strip(), ms, None
+    except Exception as ex:
+        return "", (time.perf_counter() - t0) * 1000, f"cloud STT failed: {ex!r}"[:120]
+
+
+# --- ElevenLabs (Nov 18 evening): the fast voice and the best transcription in noise -------------------------------
+# Voice: built-in voices with eleven_v3_conversational, first sound ~0.5 s (GPT-audio-mini ~1.3 s). Free accounts cannot use
+# Voice Library voices (Saudi ones) through the API (402 paid_plan_required). Scribe v1 on a noisy laptop-mic call:
+# «دقيقة ما أسمعك عيدها مرة ثانية…» where Whisper heard «دقيقة ما اسمع كايدين مالساني», ~1.1-2 s per turn.
+ELEVEN_VOICES = {"eleven-sarah": "EXAVITQu4vr4xnSDxMaL", "eleven-chris": "iP95p4xoKVk53GoZ742B"}
+ELEVEN_MODEL = os.environ.get("DEMO_ELEVEN_MODEL", "eleven_v3_conversational")
+ELEVEN_RATE = 16000
+DRAFT_AFTER_MS = 300     # caller quiet this long: start drafting the reply (TAKE_TURN itself comes at 700 ms or later)
+_SENTENCE_END = re.compile(r"[.!?؟،,]\s")
+
+
+def _env(name):
+    """A key from this window's environment or the git-ignored .env file."""
+    if os.environ.get(name):
+        return os.environ[name].strip()
+    try:
+        for line in (HERE / ".env").read_text(encoding="utf-8-sig").splitlines():
+            k, _, v = line.strip().partition("=")
+            if k.strip() == name and v.strip():
+                return v.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
+def scribe_transcribe(audio):
+    """ElevenLabs Scribe v1 on a finished turn -> (text, ms, error). Blocking: run it in a thread."""
+    key = _env("ELEVENLABS_API_KEY")
+    if not key:
+        return "", 0, "no ELEVENLABS_API_KEY (.env)"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(SR)
+        w.writeframes((np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
+    bd = os.urandom(12).hex()
+    body = (f"--{bd}\r\nContent-Disposition: form-data; name=\"model_id\"\r\n\r\nscribe_v1\r\n"
+            f"--{bd}\r\nContent-Disposition: form-data; name=\"language_code\"\r\n\r\nara\r\n"
+            f"--{bd}\r\nContent-Disposition: form-data; name=\"tag_audio_events\"\r\n\r\nfalse\r\n"
+            f"--{bd}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"turn.wav\"\r\n"
+            f"Content-Type: audio/wav\r\n\r\n").encode() + buf.getvalue() + f"\r\n--{bd}--\r\n".encode()
+    t0 = time.perf_counter()
+    try:
+        c = http.client.HTTPSConnection("api.elevenlabs.io", timeout=STT_TIMEOUT_S)
+        c.request("POST", "/v1/speech-to-text", body, {"xi-api-key": key, "Content-Type": f"multipart/form-data; boundary={bd}"})
+        r = c.getresponse()
+        d = json.loads(r.read())
+        ms = (time.perf_counter() - t0) * 1000
+        if r.status != 200:
+            return "", ms, f"Scribe error {r.status}: {str(d.get('detail', d))[:100]}"
+        text = re.sub(r"[　-鿿]", "", d.get("text", ""))     # it once slipped a Chinese character in
+        return text.strip(), ms, None
+    except Exception as ex:
+        return "", (time.perf_counter() - t0) * 1000, f"Scribe failed: {ex!r}"[:120]
+
+
+# Writers for the free call (Nov 18 test, same 4 turns): Haiku first sentence 1.33 s, warm natural Saudi wording;
+# Gemini 2.5 Flash-Lite 1.02 s but sloppier (invented a clinic name, «معكِ» to a man, skipped a question).
+WRITERS = {"haiku": "anthropic/claude-haiku-5.5", "flash-lite": "google/gemini-2.5-flash-lite"}
+
+
+class ScribeLive:
+    """ElevenLabs real-time Scribe (scribe_v3_live) for the caller's words, streamed while they speak.
+
+    Tested Nov 18 on a recorded noisy-room turn: scribe_v3_live wrote «دقيقة، دقيقة الاثنين ولا الثلاثاء؟ ما سمعتيني
+    زين» word for word (Whisper: «جيكة جيكة… سينا»), final text 253 ms after a manual commit (batch Scribe ~1.2 s).
+    The mic is sent every 100 ms; at the caller's pause we commit and get their exact words back almost at once.
+    Turn text = everything committed since the agent last took the floor."""
+    URL = ("wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v3_live&audio_format=pcm_16000"
+           "&language_code=ar&commit_strategy=manual")
+
+    def __init__(self, on_partial):
+        self.ws = None
+        self.ok = False
+        self.buf = []
+        self.turn = []                                  # committed pieces of the caller's current turn
+        self.partial = ""
+        self.on_partial = on_partial
+        self._commit_waiter = None
+        self.agent_lines, self.agent_words = [], set()
+
+    async def start(self):
+        from websockets.asyncio.client import connect as ws_connect
+        key = _env("ELEVENLABS_API_KEY")
+        if not key:
+            return "no ELEVENLABS_API_KEY (.env)"
+        try:
+            self.ws = await asyncio.wait_for(ws_connect(self.URL, additional_headers={"xi-api-key": key},
+                                                        max_size=2 ** 22), 8)
+            first = json.loads(await asyncio.wait_for(self.ws.recv(), 8))
+            if first.get("message_type") != "session_started":
+                return f"live Scribe refused: {str(first)[:120]}"
+            self.ok = True
+            asyncio.create_task(self._reader())
+            return None
+        except Exception as ex:
+            return f"live Scribe failed to connect: {ex!r}"[:150]
+
+    async def _reader(self):
+        try:
+            async for raw in self.ws:
+                m = json.loads(raw)
+                kind = m.get("message_type", "")
+                if kind == "partial_transcript":
+                    self.partial = m.get("text", "")
+                    self.on_partial(" ".join(self.turn + [self.partial]).strip())
+                elif kind.startswith("committed_transcript"):
+                    if m.get("text", "").strip():
+                        self.turn.append(m["text"].strip())
+                    self.partial = ""
+                    if self._commit_waiter and not self._commit_waiter.done():
+                        self._commit_waiter.set_result(True)
+                elif kind not in ("session_started",):
+                    if self._commit_waiter and not self._commit_waiter.done():
+                        self._commit_waiter.set_result(False)     # an error: do not keep a commit waiting
+        except Exception:
+            pass
+        self.ok = False
+
+    def feed(self, frame):
+        """One 20 ms caller frame (int16). Sent in 100 ms messages."""
+        if not self.ok:
+            return
+        self.buf.append(frame.tobytes())
+        if len(self.buf) >= 5:
+            data, self.buf = b"".join(self.buf), []
+            asyncio.create_task(self._send(data, False))
+
+    async def _send(self, data, commit):
+        try:
+            await self.ws.send(json.dumps({"message_type": "input_audio_chunk", "commit": commit, "sample_rate": SR,
+                                           "audio_base_64": base64.b64encode(data).decode()}))
+        except Exception:
+            self.ok = False
+
+    async def commit(self, timeout=1.5):
+        """The caller paused: finalise what they said. -> the turn's text so far ("" if the stream failed)."""
+        if not self.ok:
+            return ""
+        data, self.buf = b"".join(self.buf), []
+        self._commit_waiter = asyncio.get_running_loop().create_future()
+        await self._send(data, True)
+        try:
+            await asyncio.wait_for(self._commit_waiter, timeout)
+        except asyncio.TimeoutError:
+            pass
+        return self.turn_text()
+
+    def turn_text(self):
+        """The caller's words of this turn, minus the agent's own voice. On speakers the mic hears the agent and live
+        Scribe wrote its lines into the caller's turn («هلا والله، معك سارة…», Nov 18): drop every clause that is mostly
+        the agent's recent words."""
+        text = " ".join(self.turn + ([self.partial] if self.partial else [])).strip()
+        if not self.agent_words:
+            return text
+        kept = []
+        for clause in re.split(r"(?<=[.،,؟?!])\s+", text):
+            toks = tokens(clause)
+            # an echo is a long verbatim stretch of the agent's last line; a caller repeating a few of its words
+            # («الثلاثاء العصر؟», «ما في الأربعاء؟») is not, so short clauses always stay
+            if len(toks) >= 4 and sum(any(_close(t, a) for a in self.agent_words) for t in toks) / len(toks) >= 0.7:
+                continue
+            kept.append(clause)
+        return " ".join(kept).strip()
+
+    def agent_said(self, text):
+        """Remember the agent's last lines (their words), so their echo can be removed from the caller's turn."""
+        self.agent_lines = (self.agent_lines + [text])[-1:]           # the line that can echo is the last one
+        self.agent_words = {t for line in self.agent_lines for t in tokens(line)}
+
+    def new_turn(self):
+        """The agent took the floor: the next words belong to the caller's next turn."""
+        self.turn, self.partial = [], ""
+
+    async def close(self):
+        self.ok = False
+        try:
+            if self.ws is not None:
+                await self.ws.close()
+        except Exception:
+            pass
+
+
+def haiku_stream(history, scenario, on_sentence, cancelled, model=CHAT_MODEL):
+    """The writer streams the reply; each finished sentence goes to on_sentence() at once, so the voice can start
+    before the reply is complete. -> (full text, error). Blocking: run it in a thread."""
+    key = _read_key()
+    if not key:
+        return "", "no OPENROUTER_API_KEY (.env)"
+    body = json.dumps({"model": model, "temperature": 0.6, "max_tokens": 320, "reasoning": {"enabled": False},
+                       "stream": True,                      # 160 tokens cut Arabic replies mid-sentence
+                       "messages": [{"role": "system", "content": CHAT_PROMPT.format(scenario=scenario)}]
+                                   + _from_user(history[-CHAT_MAX_HISTORY:])}, ensure_ascii=False).encode("utf-8")
+    full, pending = "", ""
+    try:
+        c = http.client.HTTPSConnection("openrouter.ai", timeout=15)
+        c.request("POST", "/api/v1/chat/completions", body,
+                  {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "X-Title": "turn-taking demo"})
+        r = c.getresponse()
+        if r.status != 200:
+            return "", f"LLM error {r.status}: {r.read()[:120]!r}"
+        for line in r:
+            if cancelled():
+                return full, None
+            line = line.decode("utf-8", "replace").strip()
+            if not line.startswith("data:") or line.endswith("[DONE]"):
+                continue
+            d = json.loads(line[5:])
+            piece = (d.get("choices") or [{}])[0].get("delta", {}).get("content") or ""
+            full += piece
+            pending += piece
+            m = None
+            for m in _SENTENCE_END.finditer(pending):      # the last sentence end in what is pending
+                pass
+            # the first piece goes out at 2+ words («ألو، هلا والله،») so the voice starts early; later pieces at 4+
+            if m and len(pending[:m.end()].split()) >= (4 if full != pending else 2):
+                on_sentence(pending[:m.end()].replace("[END]", "").strip())
+                pending = pending[m.end():]
+        if pending.replace("[END]", "").strip():
+            on_sentence(pending.replace("[END]", "").strip())
+        return full.replace("[END]", "").strip(), None
+    except Exception as ex:
+        return full, f"LLM stream failed: {ex!r}"[:160]
+
+
+def eleven_speak(text, voice_id, previous_text, on_chunk, cancelled):
+    """Speak one piece with ElevenLabs, streamed as pcm16 at 16 kHz. -> error or None."""
+    key = _env("ELEVENLABS_API_KEY")
+    if not key:
+        return "no ELEVENLABS_API_KEY (.env)"
+    body = {"text": text, "model_id": ELEVEN_MODEL, "language_code": "ar"}
+    # previous_text keeps the intonation continuous across pieces, but the v3 models reject it with a 400 (only the first
+    # piece of every reply was spoken, Nov 18): send it only to the older models, and retry once without it on a 400
+    if previous_text and not ELEVEN_MODEL.startswith("eleven_v3"):
+        body["previous_text"] = previous_text[-300:]
+    try:
+        c = http.client.HTTPSConnection("api.elevenlabs.io", timeout=15)
+        c.request("POST", f"/v1/text-to-speech/{voice_id}/stream?output_format=pcm_{ELEVEN_RATE}",
+                  json.dumps(body, ensure_ascii=False).encode(), {"xi-api-key": key, "Content-Type": "application/json"})
+        r = c.getresponse()
+        if r.status == 400 and "previous_text" in body:
+            r.read()
+            body.pop("previous_text")
+            c = http.client.HTTPSConnection("api.elevenlabs.io", timeout=15)
+            c.request("POST", f"/v1/text-to-speech/{voice_id}/stream?output_format=pcm_{ELEVEN_RATE}",
+                      json.dumps(body, ensure_ascii=False).encode(), {"xi-api-key": key, "Content-Type": "application/json"})
+            r = c.getresponse()
+        if r.status != 200:
+            return f"ElevenLabs error {r.status}: {r.read()[:120]!r}"
+        carry = b""
+        while True:
+            if cancelled():
+                return None
+            b = r.read(3200)
+            if not b:
+                break
+            pcm = carry + b
+            cut = len(pcm) - len(pcm) % 2
+            carry = pcm[cut:]
+            if cut:
+                on_chunk(pcm[:cut])
+        return None
+    except Exception as ex:
+        return f"ElevenLabs failed: {ex!r}"[:160]
+
+
 class Conversation:
     """Free-call mode: what was said so far, and the caller's audio for the turn in progress."""
     TURN_LOOKBACK_FRAMES = 150                          # an interruption started up to 3 s before the agent stopped
 
-    def __init__(self, scenario, voice="shimmer"):
+    def __init__(self, scenario, voice="shimmer", stt="local", writer="haiku"):
         self.scenario = scenario.strip() or DEFAULT_SCENARIO
         self.voice = voice
+        self.writer = writer if writer in WRITERS else "haiku"
+        self.stt = stt                                  # "local" (Whisper) or "cloud" (STT_MODEL) for the caller's turns
         self.speech_id = 0                              # bumped on every new line and on STOP: older speech is dropped
         self.history = []                               # OpenAI-style messages: agent = assistant, caller = user
         self.frames = collections.deque(maxlen=50 * 30)  # last 30 s of caller audio (20 ms frames)
@@ -243,6 +550,7 @@ class Conversation:
         self.agent_text = ""
         self.busy = False
         self.pending = None                             # a caller turn that ended while we were busy
+        self.draft = None                               # an early reply draft for the current pause (see start_draft)
 
     def add_frame(self, caller):
         self.frames.append(caller.copy())
@@ -306,6 +614,7 @@ async def handler(ws):
     silent = np.zeros(320, dtype=np.int16)
     n = 0
     chat = None                                         # a Conversation in free-call mode, else None
+    live = None                                         # ScribeLive stream for the caller's words (free call, "live")
     recording = []                                      # every mic frame of the current call, saved when it ends
 
     def save_recording():
@@ -318,6 +627,91 @@ async def handler(ws):
         push({"type": "info", "text": f"mic audio saved: {path.name} ({len(recording) * 20 / 1000:.0f} s)"})
         recording.clear()
 
+    def transcribe_turn(audio, stt):
+        """Blocking (never on the event loop): the caller's finished turn as text -> (text, source, notes).
+        live Scribe falls back to batch Scribe; Scribe/cloud fall back to Whisper."""
+        text, source, notes = "", "Whisper", []
+        if stt == "live":
+            if live is not None and live.ok:
+                t0 = time.perf_counter()
+                try:
+                    text = asyncio.run_coroutine_threadsafe(live.commit(), loop).result(timeout=2.5)
+                except Exception:
+                    text = ""
+                source = f"ElevenLabs live, committed in {(time.perf_counter() - t0) * 1000:.0f} ms"
+            if not text:
+                notes.append("live Scribe gave nothing (using batch Scribe instead)")
+                stt = "scribe"
+        if audio is not None and stt in ("scribe", "cloud"):
+            fn, name = (scribe_transcribe, "ElevenLabs Scribe") if stt == "scribe" else (cloud_transcribe, STT_MODEL.split("/")[-1])
+            text, ms, err = fn(audio)
+            source = f"{name}, {ms:.0f} ms"
+            if err:
+                notes.append(err + " (using Whisper instead)")
+                text, source = "", f"Whisper ({name} failed)"
+        if not text and audio is not None and ASR.ok:
+            text, _ = ASR.transcribe(audio, max_new_tokens=128)
+        return clean_turn(text) or "…", source, notes
+
+    def start_draft():
+        """At 0.3 s of caller silence: transcribe the turn and let the writer start the reply in the background.
+        Nothing is spoken and nothing enters the history; if the caller makes a sound again, it is thrown away."""
+        d = {"eot_id": system._eot_id, "cancel": False, "used": False, "q": sentence_queue.Queue(), "res": {},
+             "ready": threading.Event(), "t0": time.perf_counter()}
+        audio, stt, hist = chat.turn_audio(), chat.stt, list(chat.history)
+        scenario, model = chat.scenario, WRITERS.get(chat.writer, CHAT_MODEL)
+
+        def run():
+            text, source, notes = transcribe_turn(audio, stt)
+            d.update(caller_text=text, source=source, notes=notes)
+            d["ready"].set()
+            if not d["cancel"]:
+                d["res"]["text"], d["res"]["err"] = haiku_stream(hist + [{"role": "user", "content": text}], scenario,
+                                                                 d["q"].put, lambda: d["cancel"], model)
+            d["q"].put(None)
+
+        threading.Thread(target=run, daemon=True).start()
+        return d
+
+    def eleven_reply(sid, draft=None):
+        """Blocking (run in a thread): the writer streams sentences into a queue (or an early draft already did),
+        ElevenLabs speaks them one by one."""
+        q, res = (draft["q"], draft["res"]) if draft else (sentence_queue.Queue(), {})
+        res["sounded"] = False
+
+        def cancelled():
+            return chat.speech_id != sid
+
+        def produce():
+            res["text"], res["err"] = haiku_stream(chat.history, chat.scenario, q.put, cancelled,
+                                                   WRITERS.get(chat.writer, CHAT_MODEL))
+            q.put(None)
+
+        def on_chunk(pcm):
+            if not cancelled():
+                if not res["sounded"]:
+                    res["first_sound"] = time.perf_counter()
+                res["sounded"] = True
+                push(pcm)
+
+        if draft is None:
+            threading.Thread(target=produce, daemon=True).start()
+        spoken = []
+        while True:
+            s = q.get()
+            if s is None:
+                break
+            if cancelled() or res.get("tts_err"):
+                continue
+            spoken.append(s)
+            chat.agent_text = " ".join(spoken)
+            push({"type": "agent_text", "speech": sid, "text": chat.agent_text})
+            err = eleven_speak(s, ELEVEN_VOICES[chat.voice], " ".join(spoken[:-1]), on_chunk, cancelled)
+            if err:
+                res["tts_err"] = err
+                push({"type": "info", "text": f"voice failed on «{s}»: {err}"})   # never go silent without a trace
+        return res
+
     async def agent_speaks(caller_text=None):
         """Free-call mode: transcribe the caller's turn (if any), ask the LLM, send the agent's line to the page."""
         if chat is None:
@@ -327,20 +721,54 @@ async def handler(ws):
             return
         chat.busy = True
         push({"type": "thinking", "on": True})
+        t_take, quiet_at_take = time.perf_counter(), system.quiet_ms
+        d = chat.draft                                  # an early draft for exactly this pause?
+        use = (caller_text is None and d is not None and not d["cancel"] and d["eot_id"] == system._eot_id
+               and chat.voice in ELEVEN_VOICES and WRITER == "haiku")
+        if d is not None and not use:
+            d["cancel"] = True
+        if d is not None:
+            d["used"] = use
+        chat.draft = None
         try:
             if caller_text is None:
-                audio = chat.turn_audio()
-                text = ""
-                if audio is not None and ASR.ok:
-                    text, _ = await loop.run_in_executor(None, lambda: ASR.transcribe(audio, max_new_tokens=128))
-                caller_text = clean_turn(text) or "…"
-                push({"type": "caller_turn", "text": caller_text})
+                if use:
+                    await loop.run_in_executor(None, d["ready"].wait, 10)
+                    caller_text = d.get("caller_text", "…")
+                    source, notes = d.get("source", "Whisper") + " · drafted early", d.get("notes", [])
+                else:
+                    caller_text, source, notes = await loop.run_in_executor(None, transcribe_turn, chat.turn_audio(), chat.stt)
+                for n in notes:
+                    push({"type": "info", "text": n})
+                push({"type": "caller_turn", "text": caller_text, "source": source})
+                if live is not None:
+                    live.new_turn()                     # the agent takes the floor: next words = the next turn
             chat.history.append({"role": "user", "content": caller_text})
             chat.speech_id += 1
             sid = chat.speech_id
             chat.agent_text = ""
             written = None
-            if WRITER == "haiku":                       # step 1: Haiku writes the line
+            if chat.voice in ELEVEN_VOICES and WRITER == "haiku":
+                # fast path: Haiku streams sentences, ElevenLabs speaks each one as soon as it is written
+                push({"type": "agent_say", "text": "", "audio": "stream", "rate": ELEVEN_RATE, "speech": sid})
+                res = await loop.run_in_executor(None, eleven_reply, sid, d if use else None)
+                if res.get("first_sound"):
+                    after = (res["first_sound"] - t_take) * 1000
+                    push({"type": "info", "text": f"reply timing: you were quiet {quiet_at_take} ms before TAKE_TURN, "
+                                                  f"first sound {after:.0f} ms after it = {quiet_at_take + after:.0f} ms "
+                                                  f"of silence{' (reply drafted early)' if use else ''}"})
+                if res.get("err") and not res.get("text"):
+                    push({"type": "info", "text": res["err"] + " (the GPT voice writes instead)"})
+                elif res.get("tts_err") and not res.get("sounded"):
+                    push({"type": "info", "text": res["tts_err"] + " (the GPT voice reads instead)"})
+                    written = res["text"]
+                    chat.speech_id += 1                 # a new speech at the GPT voice's own sample rate
+                    sid = chat.speech_id
+                else:
+                    push({"type": "agent_audio_end", "speech": sid, "failed": False, "text": chat.agent_text,
+                          "end": bool(_GOODBYE.search(chat.agent_text))})
+                    return
+            if written is None and WRITER == "haiku":   # step 1: Haiku writes the line
                 written, err = await loop.run_in_executor(None, chat_reply, chat.history, chat.scenario)
                 if err or not written:
                     push({"type": "info", "text": (err or "empty reply") + " (the voice model writes instead)"})
@@ -350,6 +778,7 @@ async def handler(ws):
                 else:
                     written = written.replace("[END]", "").strip()
             push({"type": "agent_say", "text": written or "", "audio": "stream", "rate": TTS_RATE, "speech": sid})
+            gpt_voice = chat.voice if chat.voice in TTS_VOICES else TTS_VOICES[0]
 
             def on_text(said):                          # the transcript of what the voice is saying, as it grows
                 if chat.speech_id == sid:
@@ -361,7 +790,7 @@ async def handler(ws):
             else:                                       # the voice model writes and speaks in one call
                 messages = ([{"role": "system", "content": CHAT_PROMPT.format(scenario=chat.scenario) + VOICE_PROMPT_EXTRA}]
                             + _from_user(chat.history[-CHAT_MAX_HISTORY:]))
-            said, err = await loop.run_in_executor(None, voice_stream, messages, chat.voice,
+            said, err = await loop.run_in_executor(None, voice_stream, messages, gpt_voice,
                                                    lambda pcm: push(pcm) if chat.speech_id == sid else None,
                                                    on_text, lambda: chat.speech_id != sid)
             if written and said and SequenceMatcher(None, normalize(written), normalize(said)).ratio() < 0.85:
@@ -382,9 +811,9 @@ async def handler(ws):
         finally:
             chat.busy = False
             push({"type": "thinking", "on": False})
-        held, chat.pending = chat.pending, None
-        if held == "turn" and not decider.agent_talking:  # the caller finished a turn while we were busy and the
-            asyncio.create_task(agent_speaks())         # agent is not speaking over it: answer that turn now
+            held, chat.pending = chat.pending, None
+            if held == "turn" and not decider.agent_talking:  # the caller finished a turn while we were busy and
+                asyncio.create_task(agent_speaks())         # the agent is not speaking over it: answer it now
 
     async def sender():
         while True:
@@ -400,6 +829,8 @@ async def handler(ws):
                     continue
                 if chat is not None:
                     chat.add_frame(caller)
+                if live is not None:
+                    live.feed(caller)
                 if len(recording) < 50 * 600:           # at most 10 minutes per call
                     recording.append(caller.copy())
                 if decider is not system:
@@ -410,6 +841,14 @@ async def handler(ws):
                     push({"type": "decision", "decision": d})
                     if d == "TAKE_TURN" and chat is not None:
                         asyncio.create_task(agent_speaks())
+                if chat is not None and chat.voice in ELEVEN_VOICES and WRITER == "haiku":
+                    dr = chat.draft
+                    if dr is not None and not dr["used"] and dr["eot_id"] != system._eot_id:
+                        dr["cancel"] = True             # the caller made a sound again: that draft is for nothing
+                        chat.draft = None
+                    if (chat.draft is None and not chat.busy and not decider.agent_talking and system.caller_spoke
+                            and system.quiet_ms >= DRAFT_AFTER_MS):
+                        chat.draft = start_draft()
                 n += 1
                 if n % 5 == 0:                          # 10 level updates a second for the meter
                     if decider is system:
@@ -425,21 +864,40 @@ async def handler(ws):
             t = msg.get("type")
             if t == "call_end":
                 save_recording()
+                if live is not None:                    # stop streaming (and paying) when the call ends
+                    await live.close()
+                    live = None
             elif t == "call_start":
                 save_recording()
                 chat = None
+                if live is not None:
+                    await live.close()
+                    live = None
                 for s in both:
                     s.on_scenario_start({"use_case": msg.get("use_case", ""), "language": "ar"})
                 push({"type": "info", "text": f"call started: {msg.get('use_case', '')}"})
             elif t == "chat_start":                     # free call: the agent opens with an LLM line
                 save_recording()
-                chat = Conversation(msg.get("scenario", ""), msg.get("voice", "shimmer"))
+                chat = Conversation(msg.get("scenario", ""), msg.get("voice", "shimmer"), msg.get("stt", "local"),
+                                    msg.get("writer", "haiku"))
+                if live is not None:
+                    await live.close()
+                    live = None
+                if chat.stt == "live":
+                    live = ScribeLive(lambda text: push({"type": "live_partial", "text": text}))
+                    err = await live.start()
+                    if err:
+                        push({"type": "info", "text": err + " (using batch Scribe instead)"})
+                        live, chat.stt = None, "scribe"
                 for s in both:
                     s.on_scenario_start({"use_case": "free call", "language": "ar"})
                 push({"type": "info", "text": "free call started: " + chat.scenario})
                 asyncio.create_task(agent_speaks("ألو؟"))       # the customer picks up
-            elif t == "chat_silence" and chat is not None:   # the caller said nothing: the agent goes on
-                asyncio.create_task(agent_speaks("…"))         # silence: the agent checks in
+            elif t == "chat_silence" and chat is not None:   # the page's timer: no answer since the agent's line
+                # only if the caller really stayed silent: the timer counts from the agent's last word and cannot know
+                # the caller is mid-sentence; it made the agent talk over a long turn twice (Nov 18)
+                if not system.caller_spoke and not system._in_burst:
+                    asyncio.create_task(agent_speaks("…"))     # silence: the agent checks in
             elif t == "agent_start":
                 for s in both:
                     s.on_agent_start(msg.get("text", ""), int(msg.get("duration_ms", 0)))
@@ -447,6 +905,8 @@ async def handler(ws):
                 stopped = getattr(decider, "stopped", False)
                 for s in both:
                     s.on_agent_end()
+                if live is not None and chat is not None and chat.agent_text:
+                    live.agent_said(chat.agent_text)    # its echo will be removed from the caller's next turn
                 if chat is not None:
                     if stopped:
                         chat.speech_id += 1             # STOP: the rest of the speech is cancelled (and not paid for)
@@ -454,6 +914,8 @@ async def handler(ws):
     finally:
         save_recording()
         task.cancel()
+        if live is not None:
+            await live.close()
         system.agent_talking = system.caller_spoke = False   # an old page's worker stops its GPU warm-up decodes
 
 
