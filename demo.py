@@ -273,7 +273,9 @@ def cloud_transcribe(audio):
 # Voice Library voices (Saudi ones) through the API (402 paid_plan_required). Scribe v1 on a noisy laptop-mic call:
 # «دقيقة ما أسمعك عيدها مرة ثانية…» where Whisper heard «دقيقة ما اسمع كايدين مالساني», ~1.1-2 s per turn.
 ELEVEN_VOICES = {"eleven-sarah": "EXAVITQu4vr4xnSDxMaL", "eleven-chris": "iP95p4xoKVk53GoZ742B"}
-ELEVEN_MODEL = os.environ.get("DEMO_ELEVEN_MODEL", "eleven_v3_conversational")
+# Nov 19: eleven_v4_turbo (free tier OK, same 0.5 credit/char, first sound ~0.5 s like v3) chosen by ear; it also
+# accepts previous_text, so the sentence pieces keep one intonation. DEMO_ELEVEN_MODEL=eleven_v3_conversational = old voice.
+ELEVEN_MODEL = os.environ.get("DEMO_ELEVEN_MODEL", "eleven_v4_turbo")
 ELEVEN_RATE = 16000
 DRAFT_AFTER_MS = 300     # caller quiet this long: start drafting the reply (TAKE_TURN itself comes at 700 ms or later)
 _SENTENCE_END = re.compile(r"[.!?؟،,]\s")

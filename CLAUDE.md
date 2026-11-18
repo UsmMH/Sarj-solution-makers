@@ -115,7 +115,7 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
   Page options (free call): **Your words** = ElevenLabs live `scribe_v3_live` (default; streamed while the caller talks,
   committed at 0.3 s silence, final text in ~0.25 s, best accuracy) / batch Scribe v1 / local Whisper / Gemini via
   OpenRouter. **Writer** = Haiku (default, natural) / Gemini 2.5 Flash-Lite (~0.3 s faster, sloppier). **Voice** =
-  ElevenLabs built-in Sarah/Chris with `eleven_v3_conversational` (first sound ~0.5 s; Voice Library Saudi voices need a
+  ElevenLabs built-in Sarah/Chris with `eleven_v4_turbo` (Nov 19; was `eleven_v3_conversational`, `$env:DEMO_ELEVEN_MODEL` switches back) (first sound ~0.5 s; Voice Library Saudi voices need a
   paid plan via API) / GPT-audio-mini voices (fallback). The writer streams sentences, ElevenLabs speaks each as it
   arrives (v3 rejects `previous_text`: only the first piece was spoken until fixed). An early **draft** of the reply starts
   at 0.3 s of caller silence and is thrown away if the caller makes a sound again. Each reply logs a "reply timing" line.
