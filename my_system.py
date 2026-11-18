@@ -139,6 +139,7 @@ class MySystem(System):
         self._ref_db = NO_PEAK                                   # caller's loudest 20 ms this call, outside bursts being judged
         self._burst_ref = None
         self._ref_win = collections.deque(maxlen=REF_WINDOW_FRAMES)   # (dB, loud?) of the last 200 ms
+        self._agent_end_n = 0                                    # sample index where the agent last stopped talking
         # energy fallback (step 2a)
         self.sound_ms = 0
         self.gap = 0
@@ -187,6 +188,7 @@ class MySystem(System):
         # can be over before the STOP lands), so the end-of-turn clock starts now instead of waiting for new sound.
         took_floor = self.stopped
         self.agent_talking, self.caller_spoke, self.quiet_ms = False, took_floor, 0
+        self._agent_end_n = self._n                              # the end check reads only audio after this point
         self._reset_burst()
 
     # --- every 20 ms: decide ---------------------------------------------------------------------------
@@ -196,7 +198,8 @@ class MySystem(System):
         self.hist.append(db)
         floor = float(np.percentile(self.hist, FLOOR_PERCENTILE))
         loud_stop = db > max(LOUD_DB, floor + MARGIN_DB)      # adaptive: "a burst of sound exists"
-        loud_eot = db > LOUD_DB                                # unchanged baseline, end of turn only
+        loud_eot = loud_stop     # end of turn uses the same adaptive floor: at a fixed -42 dB, room noise in a noisy
+                                 # place counted as "the caller spoke" and the agent took turns nobody gave it (Nov 18)
 
         if self.agent_talking:
             if self.stopped:
@@ -310,7 +313,10 @@ class MySystem(System):
 
     def _request_eot(self):
         with self._lock:
-            self._eot_req = (self._eot_id, self._n - EOT_WINDOW_MS * SR // 1000, self._n)
+            # only the caller's audio AFTER the agent stopped: earlier, the window held the agent's own voice coming
+            # back through the mic, and the agent "heard itself" as the caller's answer (live demo, Nov 18)
+            start = max(self._n - EOT_WINDOW_MS * SR // 1000, self._agent_end_n)
+            self._eot_req = (self._eot_id, start, self._n)
         self._wake.set()
 
     def _do_eot(self, ereq):

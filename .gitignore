@@ -15,3 +15,6 @@ data/aug/
 demo_recordings/
 demo_log.txt
 demo/voice_samples/
+data/v3_bench/
+data/SARJ_dataset_v3/
+models/

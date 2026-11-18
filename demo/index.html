@@ -80,6 +80,10 @@
         <option value="free">Free conversation (LLM agent, Arabic voice)</option>
         <option value="dev">Recorded call (dev agent sentences)</option>
       </select>
+      <select id="audio" style="flex:0 1 auto;min-width:0" title="How you listen to the agent">
+        <option value="speakers">Listening on speakers (echo cancellation on)</option>
+        <option value="headphones">Listening on headphones (raw mic, best for Whisper)</option>
+      </select>
       <select id="voice" style="min-width:180px" title="Agent voice (GPT-audio-mini, Saudi accent)">
         <option value="shimmer">Voice: Shimmer (female)</option>
         <option value="ash">Voice: Ash (male)</option>
@@ -97,7 +101,7 @@
       <button id="start" class="primary" disabled>Start call</button>
       <button id="hang" disabled>Hang up</button>
     </div>
-    <div class="hint">Use headphones. Interrupt the agent («لحظة», «لا لا», a question…) or just say «إيه» and see if it keeps talking.
+    <div class="hint">Choose speakers or headphones above (on speakers the browser removes the agent's own voice from the mic). Interrupt the agent («لحظة», «لا لا», a question…) or just say «إيه» and see if it keeps talking.
       When you finish speaking, the agent takes its turn and goes on.</div>
   </section>
 
@@ -165,16 +169,17 @@ function addRow(kind, ar, why, cls) {
 }
 
 // "[asr] burst 3 0.6s (271 ms, lp -0.30, pk -16 dB, vs caller +2 dB): 'لالا' -> STOP (cue «لا»)"
-function onLog(line) {
+function onLog(line, shadow) {
   const m = line.match(/^\[(asr|eot)\] .*?\((\d+) ms.*?\)?: (['"])(.*)\3 -> (\S+(?: \S+)?) \((.*)\)$/);
   if (!m) { addRow("info", "", line); return; }
   counts.dec++; $("ndec").textContent = counts.dec; $("lastms").textContent = m[2] + " ms";
   const vs = line.match(/vs caller ([^ ]+) dB/);
   const kind = m[1] === "asr" ? "heard" : "end check";
   const decision = m[5];
-  const why = [decision, m[6]];
+  // shadow = another system decides; these rows only show what OUR system would have done
+  const why = [shadow ? `ours would: ${decision}` : decision, m[6]];
   if (vs) why.push(vs[1] === "n/a" ? "no reference voice yet" : `${vs[1]} dB vs your voice`);
-  addRow(kind, m[4], why, decision === "STOP" ? "stop" : "");
+  addRow(kind, m[4], why, decision === "STOP" && !shadow ? "stop" : "");
 }
 
 function onDecision(d) {
@@ -215,7 +220,7 @@ function connect() {
   ws.onmessage = e => {
     if (e.data instanceof ArrayBuffer) { playChunk(e.data); return; }      // the agent's voice, streamed
     const m = JSON.parse(e.data);
-    if (m.type === "log") onLog(m.line);
+    if (m.type === "log") onLog(m.line, m.shadow);
     else if (m.type === "decision") onDecision(m.decision);
     else if (m.type === "level") onLevel(m);
     else if (m.type === "info") addRow("info", "", m.text);
@@ -243,17 +248,31 @@ class Mic extends AudioWorkletProcessor {
 }
 registerProcessor("mic", Mic);`;
 
+let micStream = null, micSource = null, micMode = "";
+
 async function ensureAudio() {
-  if (ctx) return;
-  ctx = new AudioContext({sampleRate: 16000});
-  const stream = await navigator.mediaDevices.getUserMedia({audio: {
-    channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false}});   // raw voice: headphones, no AEC
-  const tr = stream.getAudioTracks()[0], st = tr.getSettings();
-  addRow("info", "", `microphone: ${tr.label || "default"} · ${st.sampleRate || "?"} Hz · echo cancel ${st.echoCancellation} · auto gain ${st.autoGainControl}`);
-  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], {type: "application/javascript"})));
-  micNode = new AudioWorkletNode(ctx, "mic");
-  micNode.port.onmessage = e => { if (inCall && ws && ws.readyState === 1) ws.send(e.data); };
-  ctx.createMediaStreamSource(stream).connect(micNode);
+  if (!ctx) {
+    ctx = new AudioContext({sampleRate: 16000});
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], {type: "application/javascript"})));
+    micNode = new AudioWorkletNode(ctx, "mic");
+    micNode.port.onmessage = e => { if (inCall && ws && ws.readyState === 1) ws.send(e.data); };
+  }
+  if (micMode !== $("audio").value) await openMic($("audio").value);
+}
+
+// speakers: the browser's echo cancellation removes the agent's own voice from the mic (group demos);
+// headphones: raw mic, the cleanest audio for Whisper. Auto gain stays off in both: it would fool the loudness gate.
+async function openMic(mode) {
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micSource && micSource.disconnect(); }
+  const speakers = mode === "speakers";
+  micStream = await navigator.mediaDevices.getUserMedia({audio: {
+    channelCount: 1, echoCancellation: speakers, noiseSuppression: false, autoGainControl: false}});
+  micSource = ctx.createMediaStreamSource(micStream);
+  micSource.connect(micNode);
+  micMode = mode;
+  const tr = micStream.getAudioTracks()[0], st = tr.getSettings();
+  addRow("info", "", `microphone: ${tr.label || "default"} · ${speakers ? "speakers mode" : "headphones mode"} · ` +
+                     `echo cancel ${st.echoCancellation} · auto gain ${st.autoGainControl}`);
 }
 
 async function playUtt(i) {
@@ -378,6 +397,7 @@ async function startCall() {
   inCall = true; t0 = performance.now(); counts = {stop: 0, take: 0, dec: 0};
   ["nstop", "ntake", "ndec"].forEach(id => $(id).textContent = "0");
   $("start").disabled = true; $("hang").disabled = false; $("call").disabled = true; $("mode").disabled = true;
+  $("audio").disabled = true;
   if (free) {
     ws.send(JSON.stringify({type: "chat_start", scenario: $("scenario").value, voice: $("voice").value}));
     setState("thinking"); $("sentence").textContent = "…";
@@ -398,7 +418,7 @@ function endCall(reason) {
   }
   stopStream();
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: "call_end"}));
-  $("mode").disabled = false;
+  $("mode").disabled = false; $("audio").disabled = false;
   setState("idle"); $("sentence").textContent = "—";
   $("start").disabled = false; $("hang").disabled = true; $("call").disabled = false;
   addRow("info", "", "call ended" + (reason ? ": " + reason : ""));
@@ -418,6 +438,7 @@ function showMode() {
   $("call").style.display = f ? "none" : "";
 }
 $("mode").onchange = showMode; showMode();
+$("audio").onchange = () => { if (ctx && !inCall) openMic($("audio").value).catch(e => addRow("error", "", String(e))); };
 loadVoices(); speechSynthesis.onvoiceschanged = loadVoices;
 connect(); tick();
 </script>

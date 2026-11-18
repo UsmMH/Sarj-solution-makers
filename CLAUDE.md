@@ -1,7 +1,7 @@
 # CLAUDE.md — Team 4, Sarj Arabic Turn-Taking Hackathon
 
-Read this first. Hand-over from the chat sessions that built the system (Nov 15-18, 2026). Last update: night of
-Nov 17 -> 18 (Day 3 -> Day 4).
+Read this first. Hand-over from the chat sessions that built the system (Nov 15-18, 2026). Last update: evening of
+Nov 18 (Day 4). Code freeze and final submission: **Saturday Nov 21, 12:00** (moved from Nov 19).
 
 ## Who and what
 - User: Usama, final-year Information Systems student at KSU, working with a small team (some non-technical). He wants to go **step by step**, and wants **full git commands** (`git add ...` + `git commit -m "..."`), never just a message. He runs on Windows / PowerShell, RTX 3060 Ti laptop.
@@ -68,6 +68,36 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
 | loudstart+8 (stress) | — | 86.2 (2 false stops: loud TV early becomes the reference) |
 | click (stress) | 80.4 (click pushed the reference ~9 dB up) | 80.2 with the sustained reference: the reference is now right (AM-D02 +5 dB vs caller, as on clean), the miss is AM-D02 landing just past the 1.5 s deadline = a late-stop problem; clean 87.0 in the same session |
 - Shelved, with numbers: LLM STOP/KEEP judge on undecided texts (2-4 would-be false stops per model, ~1 helpful, 0.5-1 s); cloud audio models as ASR (best 0.83 match in 2.4-3.9 s vs Whisper 0.75 in 0.5 s). Late stops come from short first decodes and the 3-word rule, not from the recogniser.
+
+## Evening of Nov 18 (Day 4)
+- **Team dataset** `data/SARJ_dataset_v3` (git-ignored; 58 short calls = 28 scenarios + phone copies + 2 echo; ElevenLabs
+  agent voices, one recorded voice per caller line, labels csv-derived, never listened to). `convert_v3.py` ->
+  `data/v3_bench` (benchmark layout; evident_ms = onset_ms because it is not labelled, so latency is HARSH there; event
+  kinds forced to "interruption"; dialect names mapped). Whisper label check: text match 0.91, no clip below 0.5, so the
+  labels are trustworthy. Use it for stop/keep decisions, not latency, and do not tune numbers on it (28 scenarios).
+- Base turbo on it (live, before the cue fixes): Core 65.7, R 0.47, **S 1.00** (no false stop on 30 KEEP calls incl. echo,
+  TV, cafe, horn, door). Real misses: IH05 «استنى» heard «ستنة/سنة», IH04 phone (stock phrase on the first decodes of very
+  short calls), AM02 «طيب؟» (rising intonation, text cannot tell).
+- **Arabic-dialect Whisper** `oddadmix/whisper-large-v3-turbo-arabic-dialectal-v2` (Apache 2.0, same turbo size/speed),
+  converted to CTranslate2 float16 in `models/turbo-ar-dialectal-v2-ct2` (git-ignored; preprocessor_config.json copied from
+  base turbo, 128 mels). Use: `$env:ASR_MODEL="models/turbo-ar-dialectal-v2-ct2"`. `model_compare.py` = offline A/B.
+  It writes Gulf letters («وڨف/وگف» for «وقف») -> `normalize()` now maps گ/ڨ->ق, ڤ->ف. Live: team data 70.1 (R 0.54, S 1.00,
+  2 misses) vs base 65.7; **dev 88.8 (false stop on BG-D01 TV, miss GI-D03 «لحظة» heard «لحفة»)** vs base 94.9.
+  **Decision: keep base turbo** (dev is generated like the hidden set; a false stop is the costliest error), port the
+  lessons into rules: «ستنى/ستنا/ستنه» cue variants; near-spelling cue matches need the same first letter («وأني»~«ثواني»
+  and «أستاذ»~«استنا» were false cues); «أستاذ/أستاذة» excluded outright. Replay of all logged decodes: only those two
+  wrong stops lost, only real cues gained.
+- **Current system (base turbo + all Nov 18 fixes), live:** dev **95.0** (R 0.94, S 1.00, best so far; run `cues-dev`),
+  team data **71.0** (R 0.53, S 1.00; run `cues-v3_bench`) vs 65.7 before and 70.1 with the dialect model. Remaining team
+  misses: AM02 ×2 (intonation), IH04 phone (stock phrase on first decodes of a very short call), IH05 noisy-door phone.
+- Deadline news (Nov 18 evening, confirmed): **code freeze AND final submission moved to Saturday Nov 21, 12:00**.
+- End of turn: "caller spoke" uses the adaptive floor (fixed -42 dB counted room noise in a noisy place as speech), and
+  the end check reads only audio after the agent stopped (the agent's own voice in the mic was read as the caller).
+- Demo: Haiku writes the agent's lines with an Arabic Saudi-style prompt; GPT-audio-mini READS them via "your next line is
+  already decided: say exactly «…»" (5/5 faithful; the "text-to-speech engine" framing was 1/6, it answered questions).
+  `DEMO_WRITER=voice` = old one-step. Speakers/headphones switch (echo cancellation for group demos). `--system v1` lets
+  another system file decide (mentor's `my_system_v1.py`, untracked, kept out of git).
+- Mentors' suggestion to move work to cloud sessions: declined (all testing needs this laptop's GPU, mic and local data).
 
 ## Known weak spots / next work (priority)
 1. **Late stops**: mostly fixed by the 400 ms lead-in (GI-D02/AM-D02 now ~0.5 s). Left: OV-D03 ~0.8 s (3-word rule: «يا أخي هذا» = 2 content words at 0.6 s), GI-D03 ~0.46 s. Idea: 2 words enough when the burst is as loud as the caller's voice. Check on clean + volume + stress sets, not by eye.

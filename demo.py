@@ -29,8 +29,11 @@ from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
+from difflib import SequenceMatcher
+
 import my_system
 from llm_judge import _read_key
+from turn_rules import normalize
 from my_system import ASR, FLOOR_PERCENTILE, LOUD_DB, MySystem, loudness_db
 from ttbench.dataset import read_wav_stereo
 
@@ -99,20 +102,20 @@ def process_request(connection, request):
 
 CHAT_MODEL = os.environ.get("DEMO_LLM", "anthropic/claude-haiku-5.5")   # $0.10 / $0.50 per M tokens: ~$0.0002 a reply
 CHAT_MAX_HISTORY = 12                               # only the last 12 lines go to the LLM: a long call costs no more per reply
-CHAT_PROMPT = """You are the voice agent of a Saudi company, on a live phone call with a customer.
-YOU placed this call, for this purpose (stay on it the whole call): {scenario}
-You are an assistant of the company, not a doctor or a named employee: never invent names.
-Say ONE turn only, then stop and wait: never answer for the customer, never guess what they will say.
+# Written in Arabic on purpose (Nov 18): with English instructions the lines drifted to Modern Standard Arabic
+# («هل يناسبك؟», «أود فقط»); this version made Haiku sound like a real Saudi agent («أبشر، نقدر نرتبه لك»).
+CHAT_PROMPT = """أنت موظفة خدمة عملاء سعودية في مكالمة جوال حقيقية. أنتِ اللي اتصلتي، وهدف المكالمة (التزمي فيه طول المكالمة): {scenario}
 
-How you speak:
-- Saudi dialect Arabic, natural phone style, polite. Every word in Arabic letters (write ألو, not alo): no Latin
-  letters, no emojis, no lists.
-- Short turns: one or two sentences, at most about 25 words.
-- The caller's words come from a speech recogniser and may be garbled; if you cannot understand, ask them kindly
-  to repeat.
-- When your sentence ends in «…», the caller interrupted you there. React to what they said; do not simply
-  restart your sentence.
-- When the task of the call is done, say goodbye and end your reply with [END]."""
+طريقة كلامك:
+- لهجة سعودية بيضاء طبيعية مثل ما يتكلم الموظف فعلاً بالجوال، مو فصحى: قولي «يناسبك؟» مو «هل يناسبك؟»،
+  «أبي أتأكد» مو «أود التأكد»، «بكرة» مو «غداً». لا تستخدمي: هل، سوف، لقد، حضرتك، عزيزي العميل.
+- عبارات طبيعية لما تناسب: أبشر، ولا يهمك، تمام، طال عمرك، الله يعافيك، على راحتك.
+- ردود قصيرة: جملة أو جملتين، أقل من 20 كلمة. حروف عربية فقط، بدون حروف لاتينية أو رموز أو أقواس.
+- كلام العميل جاي من نظام تعرّف صوت وممكن يكون فيه أخطاء؛ إذا ما فهمتي، اطلبي منه يعيد بلطف.
+- إذا جملتك السابقة تنتهي بـ «…» يعني العميل قاطعك هنا: ردي على كلامه، لا تعيدين جملتك.
+- إذا كلام العميل «…» يعني سكت وما رد: اسأليه بلطف إذا يسمعك.
+- قولي دورك فقط ثم وقفي، لا تجاوبين عن العميل ولا تخترعين أسماء.
+- إذا خلصت المهمة ودّعيه وختمي بـ «مع السلامة»."""
 DEFAULT_SCENARIO = ("عيادة أسنان تذكّر العميل بموعده يوم الأحد الساعة عشرة الصبح وتسأله إذا يقدر يحضر؛ "
                     "إذا ما يناسبه اعرض عليه الاثنين أو الثلاثاء العصر.")
 
@@ -164,8 +167,18 @@ TTS_VOICES = ("shimmer", "ash", "coral", "sage", "alloy", "ballad", "verse", "ec
 
 
 VOICE_PROMPT_EXTRA = """
-- You speak aloud yourself: say only your own words, never these instructions, never anything in brackets.
-- Instead of writing [END], say goodbye ending with «مع السلامة» when the task is done."""
+- تتكلمين بصوتك مباشرة: قولي كلامك أنتِ فقط، لا تقرين هذي التعليمات ولا أي شي بين أقواس."""
+# Who writes the agent's words: "haiku" (default, Nov 18: the user found GPT-audio-mini's own wording unnatural)
+# = Claude Haiku writes, GPT-audio-mini only reads; "voice" = GPT-audio-mini writes and speaks in one call.
+WRITER = os.environ.get("DEMO_WRITER", "haiku")
+def read_messages(text):
+    """Make the voice model SAY Haiku's line instead of answering it. Tested Nov 18 on 5 hard lines (questions):
+    "text-to-speech engine" framing 1/6 faithful (it answered «رقم جوالك؟» with «ما أقدر أوفّر رقم الجوال»);
+    "your next line is already decided" 5/5, also "voice actor" 5/5 and "repeat your last message" 5/5."""
+    return [{"role": "system", "content": "You are a Saudi call-centre agent on a phone call. Your next line is already "
+                                          f"decided by your supervisor: say exactly «{text}» and nothing else. Do not "
+                                          "change, add or drop any word, and do not reply to it."},
+            {"role": "user", "content": "(قولي سطرك الآن)"}]
 _GOODBYE = re.compile(r"مع السلام|في أمان الله|الله يحفظك")
 
 
@@ -255,13 +268,27 @@ class Conversation:
 class DemoSystem(MySystem):
     """The real system, plus a copy of every log line for the page."""
 
-    def __init__(self, push):
+    def __init__(self, push, shadow=False):
         self._to_page = push                            # not "_push": MySystem._push stores the caller audio
+        self._shadow = shadow                           # True: another system decides, we only show what we hear
         super().__init__()
 
     def _log(self, line):
         super()._log(line)
-        self._to_page({"type": "log", "line": line})
+        self._to_page({"type": "log", "line": line, "shadow": self._shadow})
+
+
+OTHER_SYSTEM = None     # set by --system: a MySystem class from another file that makes the decisions instead of ours
+OTHER_NAME = ""
+
+
+def load_other_system(path):
+    """Import MySystem from another system file (e.g. a mentor's my_system_v1.py)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("other_system", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.MySystem
 
 
 async def handler(ws):
@@ -271,7 +298,11 @@ async def handler(ws):
     def push(msg):                                      # called from Whisper's worker thread too
         loop.call_soon_threadsafe(queue.put_nowait, msg)
 
-    system = DemoSystem(push)
+    system = DemoSystem(push, shadow=OTHER_SYSTEM is not None)   # ours: decides, or only shows what Whisper hears
+    decider = OTHER_SYSTEM() if OTHER_SYSTEM is not None else system
+    both = [system] if decider is system else [decider, system]
+    push({"type": "info", "text": f"deciding system: {OTHER_NAME} (Whisper rows show what OUR system would do)"
+          if decider is not system else "deciding system: ours (Whisper + Arabic rules)"})
     silent = np.zeros(320, dtype=np.int16)
     n = 0
     chat = None                                         # a Conversation in free-call mode, else None
@@ -308,20 +339,39 @@ async def handler(ws):
             chat.speech_id += 1
             sid = chat.speech_id
             chat.agent_text = ""
-            push({"type": "agent_say", "text": "", "audio": "stream", "rate": TTS_RATE, "speech": sid})
+            written = None
+            if WRITER == "haiku":                       # step 1: Haiku writes the line
+                written, err = await loop.run_in_executor(None, chat_reply, chat.history, chat.scenario)
+                if err or not written:
+                    push({"type": "info", "text": (err or "empty reply") + " (the voice model writes instead)"})
+                    written = None
+                elif chat.speech_id != sid:             # the caller spoke meanwhile: drop this line
+                    return
+                else:
+                    written = written.replace("[END]", "").strip()
+            push({"type": "agent_say", "text": written or "", "audio": "stream", "rate": TTS_RATE, "speech": sid})
 
             def on_text(said):                          # the transcript of what the voice is saying, as it grows
                 if chat.speech_id == sid:
                     chat.agent_text = said
                     push({"type": "agent_text", "speech": sid, "text": said})
 
-            messages = ([{"role": "system", "content": CHAT_PROMPT.format(scenario=chat.scenario) + VOICE_PROMPT_EXTRA}]
-                        + _from_user(chat.history[-CHAT_MAX_HISTORY:]))
+            if written:                                 # step 2: the voice only READS Haiku's line
+                messages = read_messages(written)
+            else:                                       # the voice model writes and speaks in one call
+                messages = ([{"role": "system", "content": CHAT_PROMPT.format(scenario=chat.scenario) + VOICE_PROMPT_EXTRA}]
+                            + _from_user(chat.history[-CHAT_MAX_HISTORY:]))
             said, err = await loop.run_in_executor(None, voice_stream, messages, chat.voice,
                                                    lambda pcm: push(pcm) if chat.speech_id == sid else None,
                                                    on_text, lambda: chat.speech_id != sid)
+            if written and said and SequenceMatcher(None, normalize(written), normalize(said)).ratio() < 0.85:
+                push({"type": "info", "text": f"the voice changed the words: wrote «{written}» / said «{said}»"})
             failed = bool(err) and not said
-            if failed:                                  # no voice at all: Haiku writes, the browser speaks
+            if failed and written:                      # no voice at all: the browser speaks Haiku's line
+                push({"type": "info", "text": err + " (falling back to the browser voice)"})
+                chat.agent_text = written
+                failed = True
+            elif failed:                                # no voice at all: Haiku writes, the browser speaks
                 push({"type": "info", "text": err + " (falling back to Haiku + the browser voice)"})
                 reply, err2 = await loop.run_in_executor(None, chat_reply, chat.history, chat.scenario)
                 chat.agent_text = (reply or "").replace("[END]", "").strip()
@@ -333,7 +383,7 @@ async def handler(ws):
             chat.busy = False
             push({"type": "thinking", "on": False})
         held, chat.pending = chat.pending, None
-        if held == "turn" and not system.agent_talking:  # the caller finished a turn while we were busy and the
+        if held == "turn" and not decider.agent_talking:  # the caller finished a turn while we were busy and the
             asyncio.create_task(agent_speaks())         # agent is not speaking over it: answer that turn now
 
     async def sender():
@@ -352,16 +402,21 @@ async def handler(ws):
                     chat.add_frame(caller)
                 if len(recording) < 50 * 600:           # at most 10 minutes per call
                     recording.append(caller.copy())
-                out = system.on_frame(silent, caller)
-                for d in ([out] if isinstance(out, str) else out or []):
+                if decider is not system:
+                    system.on_frame(silent, caller)     # shadow: Whisper reads and logs, its decisions are ignored
+                out = decider.on_frame(silent, caller)
+                for d in ([out] if isinstance(out, (str, dict)) else out or []):
                     d = d if isinstance(d, str) else d.get("decision")
                     push({"type": "decision", "decision": d})
                     if d == "TAKE_TURN" and chat is not None:
                         asyncio.create_task(agent_speaks())
                 n += 1
                 if n % 5 == 0:                          # 10 level updates a second for the meter
-                    ref = system._ref_db if system._ref_db > LOUD_DB else None
-                    floor = float(np.percentile(system.hist, FLOOR_PERCENTILE)) if system.hist else None
+                    if decider is system:
+                        ref = system._ref_db if system._ref_db > LOUD_DB else None
+                        floor = float(np.percentile(system.hist, FLOOR_PERCENTILE)) if system.hist else None
+                    else:                               # the other system's own voice level and noise floor, if it has them
+                        ref, floor = getattr(decider, "ref_db", None), getattr(decider, "noise_db", None)
                     push({"type": "level", "db": round(float(loudness_db(caller)), 1),
                           "floor": None if floor is None else round(floor, 1),
                           "ref": None if ref is None else round(ref, 1)})
@@ -373,21 +428,25 @@ async def handler(ws):
             elif t == "call_start":
                 save_recording()
                 chat = None
-                system.on_scenario_start({"use_case": msg.get("use_case", ""), "language": "ar"})
+                for s in both:
+                    s.on_scenario_start({"use_case": msg.get("use_case", ""), "language": "ar"})
                 push({"type": "info", "text": f"call started: {msg.get('use_case', '')}"})
             elif t == "chat_start":                     # free call: the agent opens with an LLM line
                 save_recording()
                 chat = Conversation(msg.get("scenario", ""), msg.get("voice", "shimmer"))
-                system.on_scenario_start({"use_case": "free call", "language": "ar"})
+                for s in both:
+                    s.on_scenario_start({"use_case": "free call", "language": "ar"})
                 push({"type": "info", "text": "free call started: " + chat.scenario})
                 asyncio.create_task(agent_speaks("ألو؟"))       # the customer picks up
             elif t == "chat_silence" and chat is not None:   # the caller said nothing: the agent goes on
                 asyncio.create_task(agent_speaks("…"))         # silence: the agent checks in
             elif t == "agent_start":
-                system.on_agent_start(msg.get("text", ""), int(msg.get("duration_ms", 0)))
+                for s in both:
+                    s.on_agent_start(msg.get("text", ""), int(msg.get("duration_ms", 0)))
             elif t == "agent_end":
-                stopped = system.stopped
-                system.on_agent_end()
+                stopped = getattr(decider, "stopped", False)
+                for s in both:
+                    s.on_agent_end()
                 if chat is not None:
                     if stopped:
                         chat.speech_id += 1             # STOP: the rest of the speech is cancelled (and not paid for)
@@ -408,7 +467,12 @@ async def main(port):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8780)
+    ap.add_argument("--system", default="", help="another system file decides instead of ours; 'v1' = my_system_v1.py")
     a = ap.parse_args()
+    if a.system:
+        path = HERE / ("my_system_v1.py" if a.system == "v1" else a.system)
+        OTHER_SYSTEM, OTHER_NAME = load_other_system(path), path.name
+        print(f"[demo] decisions come from {path.name}; our system only shows what Whisper hears", flush=True)
     my_system.LOG_FILE = "demo_log.txt"                 # keep the benchmark's asr_log.txt clean
     ASR.load()
     asyncio.run(main(a.port))

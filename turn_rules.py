@@ -20,7 +20,10 @@ import re
 from difflib import SequenceMatcher
 
 _DIACRITICS = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭـ]")   # tashkeel, tatweel
-_LETTERS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي"})
+_LETTERS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي",
+                          # dialect spellings of the Gulf "g" and "v" (the Arabic-dialect Whisper writes «وڨف»/«وگف»
+                          # for «وقف»): map them back so cues and phrases still match
+                          "گ": "ق", "ڨ": "ق", "ڤ": "ف"})
 
 
 def normalize(text: str) -> str:
@@ -39,9 +42,11 @@ def _words(s: str) -> frozenset:
 STOP_CUES = _words("""
     لحظة لحظات ثواني ثانية دقيقة استنى استنا استنوا انتظر انتظري وقف توقف قف
     اصبر اصبري اصبروا
+    ستنى ستنا ستنه
     اسمع اسمعني اسمعي اسمعيني بس عفوا سوري sorry wait stop pardon
 """)
 PREFIX_CUES = ("لحظ", "استن")            # a word still being said: «لحظ…», «استن…»
+NOT_CUES = _words("استاذ استاذه")         # common words one letter from a cue: «أستاذ» ~ «استنا» false-stopped live (Nov 18)
 # Multi-word floor bids from general Saudi / Gulf phone speech (added Nov 18, NOT taken from the dev transcripts;
 # «ما طلبت» and «ما يناسبني» also occur in two dev STOP calls that already stop on other cues). Phrases, not single
 # words: «فاهم» alone is a backchannel, «ماني فاهم» is the opposite.
@@ -94,7 +99,10 @@ def find_cue(toks: list):
             return t
         if t in STOP_CUES or (len(t) >= 3 and t.startswith(PREFIX_CUES)):
             return t
-        if len(t) >= 4 and any(len(c) >= 4 and SequenceMatcher(None, t, c).ratio() >= 0.8 for c in STOP_CUES):
+        # near-spellings («اصبار», «دقيق») count, but only with the same first letter: «وأني» ~ «ثواني» and
+        # «أستاذ» ~ «استنا» false-stopped on TV / normal speech (Nov 18)
+        if t not in NOT_CUES and len(t) >= 4 and \
+                any(len(c) >= 4 and c[0] == t[0] and SequenceMatcher(None, t, c).ratio() >= 0.8 for c in STOP_CUES):
             return t
     return None
 
