@@ -347,6 +347,9 @@ class ScribeLive:
         self.on_partial = on_partial
         self._commit_waiter = None
         self.agent_lines, self.agent_words = [], set()
+        self.recent = collections.deque(maxlen=50 * 4)  # the last 4 s of mic frames, to send a held-back burst
+        self.held = False
+        self._zeros = np.zeros(320, dtype="<i2").tobytes()
 
     async def start(self):
         from websockets.asyncio.client import connect as ws_connect
@@ -386,11 +389,26 @@ class ScribeLive:
             pass
         self.ok = False
 
-    def feed(self, frame):
-        """One 20 ms caller frame (int16). Sent in 100 ms messages."""
+    def feed(self, frame, hold=False, burst_frames=0):
+        """One 20 ms caller frame (int16). Sent in 100 ms messages.
+
+        hold = the agent is talking and our engine has not stopped it. On speakers the mic then hears the agent, and
+        Scribe wrote its lines into the caller's turn, even short ones the text filter cannot tell apart («هلا والله»,
+        «يناسبك؟», Nov 19). So while held, Scribe gets silence. When the hold ends (the engine said STOP, or the agent
+        finished while the caller was mid-word), the caller's burst is sent from its start (burst_frames = its length
+        in frames): the words that made us stop are never lost."""
         if not self.ok:
             return
-        self.buf.append(frame.tobytes())
+        self.recent.append(frame)
+        if hold:
+            self.held = True
+            self.buf.append(self._zeros)
+        elif self.held:
+            self.held = False
+            n = min(burst_frames + 5, len(self.recent)) if burst_frames else 1   # + 100 ms before the burst
+            self.buf += [f.tobytes() for f in list(self.recent)[-n:]]
+        else:
+            self.buf.append(frame.tobytes())
         if len(self.buf) >= 5:
             data, self.buf = b"".join(self.buf), []
             asyncio.create_task(self._send(data, False))
@@ -830,7 +848,9 @@ async def handler(ws):
                 if chat is not None:
                     chat.add_frame(caller)
                 if live is not None:
-                    live.feed(caller)
+                    hold = bool(getattr(decider, "agent_talking", False)) and not getattr(decider, "stopped", False)
+                    burst = (system._n - system._burst_start) // 320 if system._in_burst else 0
+                    live.feed(caller, hold, burst)
                 if len(recording) < 50 * 600:           # at most 10 minutes per call
                     recording.append(caller.copy())
                 if decider is not system:

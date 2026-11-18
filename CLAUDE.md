@@ -127,6 +127,11 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
   lines marked "you interrupted"; "replied after X s" badges), a 30 s turn-taking timeline (agent speech, caller level,
   STOP / TAKE_TURN markers), call numbers. Settings and the engineer log (meter + table) are collapsed `<details>`.
   Arabic inside English text goes in `<bdi dir="rtl">` (mixed() helper), or it renders scrambled.
+  Theme button in the header: auto (Windows setting) / light / dark, remembered per browser.
+- Echo in live Scribe (Nov 19): on speakers the agent's lines (even short ones «هلا والله», «يناسبك؟») landed in the
+  caller's bubbles. Now `ScribeLive.feed(frame, hold, burst_frames)` sends silence while the agent talks and the engine
+  has not stopped it; on STOP (or the agent ending mid-burst) the caller's burst is sent from its start (+100 ms).
+  The clause filter stays as a second layer.
 - Mic lesson: the Razer BlackShark V2 path had a noise gate (16-22 % exact digital silence, chopped words); the laptop mic had 0 %. For Day 6 use the laptop mic or a plain USB mic and test it on the demo machine.
 
 ## Write-up (WRITEUP.md, due by the freeze) must declare
