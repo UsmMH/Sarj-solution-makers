@@ -66,7 +66,11 @@ The caller reference voice is the loudest frame of sustained caller speech so fa
 faster-whisper (CTranslate2), NumPy, websockets. Model: `mobiuslabsgmbh/faster-whisper-large-v3-turbo`.
 
 A live browser demo (`demo.py`) runs the same system on a microphone, with either the real agent sentences of the dev
-calls or a free conversation in which an LLM voice agent talks with the user. It is not part of the scored system.
+calls or a free conversation with a voice agent. Around the scored engine it adds three cloud layers, demo only:
+ElevenLabs real-time transcription of the caller's words (silenced while the agent speaks, so the agent's own voice is
+not written as the caller's; after a STOP it receives the burst that caused it), Claude Haiku writing short Saudi-style
+replies sentence by sentence, and an ElevenLabs voice speaking each sentence as it arrives. STOP cuts the voice at once;
+the agent answers about 2.0-2.5 s after the caller goes quiet. It is not part of the scored system.
 
 ## 4. Speed and cost
 
@@ -126,6 +130,7 @@ reaches 95.0 on dev and 71.0 on the team calls.
 | 5 | HT-D01 | took the turn at 19.4 s while the caller was still talking | `python -m ttbench.render --run runs\pad-clean --scenario HT-D01` | «يعني تقريبا ساعة سبعة» ends with a complete-looking phrase after a pause, so we took the turn after 0.7 s; the caller continued. Words alone cannot always tell a pause from an end. |
 | 6 | BG-D01 | false stop on TV speech in the "loud start" stress copy («على المترجمات لكثير…») | `python -m ttbench.render --run runs\pad-loudstart+8 --scenario BG-D01` | The TV was louder than the caller early in the call, so it became the caller's "reference voice"; TV speech then looked as loud as the caller and passed. Text alone cannot tell a TV presenter from the caller. |
 | 7 | live | (live microphone test, Nov 17) «اصبر، اصبر» did not stop the agent | demo recording | «اصبر» ("wait") is common Gulf Arabic but was not in our cue list (none of the 24 dev calls uses it). Added, together with 60 general Gulf floor-bid phrases checked against 2,719 logged decodes for false stops. |
+| 8 | live | (live demo, Nov 19) the caller answered «يوم الثلوث» (Saudi for Tuesday) softly over the agent's question «الاثنين ولا الثلاثاء؟»; the agent finished its question instead of stopping | `demo_recordings/call-001356.wav` | Whisper heard nonsense («يوميسور أسا») and the burst was 8 dB quieter than the caller's own voice, so it was one or two unclear, quiet words: kept. A dialect word, said softly, at the end of a question. Letting 2 words stop the agent would fix it but caused false stops on TV in our replay. |
 
 ## 7. Strengths, weaknesses and trade-offs
 
@@ -153,8 +158,11 @@ second; more Gulf phrases collected from many speakers through the live demo.
 | Model | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` (CTranslate2, float16) via `faster-whisper` | speech recognition in the scored system (local, GPU) |
 | Library | faster-whisper, CTranslate2, NVIDIA cuBLAS / cuDNN 12 (pip wheels) | running Whisper on the GPU |
 | Model | `Systran/faster-whisper-small` | early recognition probes only, not in the final system |
-| API | OpenRouter: `openai/gpt-audio-mini` | live demo only: writes and speaks the agent's replies (not in the scored system) |
-| API | OpenRouter: `anthropic/claude-haiku-5.5` | demo fallback; LLM STOP/KEEP judge experiment (dropped) |
+| API | ElevenLabs: `scribe_v3_live` (real-time) and `scribe_v1` (batch) speech-to-text | live demo only: the caller's words for the agent's reply (not in the scored system) |
+| API | ElevenLabs text-to-speech: `eleven_v4_turbo`, `eleven_flash_v2_5`, built-in voices Sarah and Chris | live demo only: the agent's voice |
+| API | OpenRouter: `anthropic/claude-haiku-5.5` | live demo: writes the agent's replies; earlier, LLM STOP/KEEP judge experiment (dropped) |
+| API | OpenRouter: `google/gemini-2.5-flash-lite` (writer), `google/gemini-2.5-flash` (transcription) | live demo options |
+| API | OpenRouter: `openai/gpt-audio-mini` | live demo fallback voice (writes and speaks when ElevenLabs fails) |
 | API | OpenRouter: `meta-llama/llama-3.3-70b-instruct`, `openai/gpt-4.1-mini` | LLM STOP/KEEP judge experiment (dropped) |
 | API | OpenRouter: `google/gemini-2.5-flash`, `google/gemini-3.7-flash`, `qwen/qwen3.8-omni-flash`, `mistralai/voxtral-small-24b-2507`, `openai/gpt-audio-mini` | comparison with cloud speech recognition (dropped) |
 | Library | `edge-tts` (Microsoft neural ar-SA voices) | voice comparison for the demo (rejected) |
