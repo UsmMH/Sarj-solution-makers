@@ -111,12 +111,14 @@ CHAT_PROMPT = """أنت موظفة خدمة عملاء سعودية في مكا�
 طريقة كلامك:
 - لهجة سعودية بيضاء طبيعية مثل ما يتكلم الموظف فعلاً بالجوال، مو فصحى: قولي «يناسبك؟» مو «هل يناسبك؟»،
   «أبي أتأكد» مو «أود التأكد»، «بكرة» مو «غداً». لا تستخدمي: هل، سوف، لقد، حضرتك، عزيزي العميل.
-- عبارات طبيعية لما تناسب: أبشر، ولا يهمك، تمام، طال عمرك، الله يعافيك، على راحتك.
-- ردود قصيرة: جملة أو جملتين، أقل من 20 كلمة. حروف عربية فقط، بدون حروف لاتينية أو رموز أو أقواس.
+- ادخلي في الموضوع على طول. عبارة مجاملة وحدة بالكثير في الرد (أبشر، تمام، ولا يهمك…)، وأغلب الردود بدونها.
+  لا تكررين «الله يعافيك» و«أبشر» و«شكراً» في كل رد، ولا تعيدين كلام العميل ولا تأكدين نفس الشي مرتين.
+- ردود قصيرة جداً: جملة وحدة غالباً، أقل من 12 كلمة. حروف عربية فقط، بدون حروف لاتينية أو رموز أو أقواس.
+- الختام قصير: أكدي الموعد بجملة وحدة ثم «مع السلامة».
 - كلام العميل جاي من نظام تعرّف صوت وممكن يكون فيه أخطاء؛ إذا ما فهمتي، اطلبي منه يعيد بلطف.
 - إذا جملتك السابقة تنتهي بـ «…» يعني العميل قاطعك هنا: ردي على كلامه، لا تعيدين جملتك.
 - إذا كلام العميل «…» يعني سكت وما رد: اسأليه بلطف إذا يسمعك.
-- قولي دورك فقط ثم وقفي، لا تجاوبين عن العميل ولا تخترعين أسماء.
+- اسمك سارة. قولي دورك فقط ثم وقفي، لا تجاوبين عن العميل ولا تخترعين أسماء ثانية.
 - إذا خلصت المهمة ودّعيه وختمي بـ «مع السلامة»."""
 DEFAULT_SCENARIO = ("عيادة أسنان تذكّر العميل بموعده يوم الأحد الساعة عشرة الصبح وتسأله إذا يقدر يحضر؛ "
                     "إذا ما يناسبه اعرض عليه الاثنين أو الثلاثاء العصر.")
@@ -272,7 +274,11 @@ def cloud_transcribe(audio):
 # Voice: built-in voices with eleven_v3_conversational, first sound ~0.5 s (GPT-audio-mini ~1.3 s). Free accounts cannot use
 # Voice Library voices (Saudi ones) through the API (402 paid_plan_required). Scribe v1 on a noisy laptop-mic call:
 # «دقيقة ما أسمعك عيدها مرة ثانية…» where Whisper heard «دقيقة ما اسمع كايدين مالساني», ~1.1-2 s per turn.
-ELEVEN_VOICES = {"eleven-sarah": "EXAVITQu4vr4xnSDxMaL", "eleven-chris": "iP95p4xoKVk53GoZ742B"}
+ELEVEN_VOICES = {"eleven-sarah": "EXAVITQu4vr4xnSDxMaL", "eleven-chris": "iP95p4xoKVk53GoZ742B",
+                 "eleven-sarah-quick": "EXAVITQu4vr4xnSDxMaL", "eleven-chris-quick": "iP95p4xoKVk53GoZ742B"}
+# "quick" voices (Nov 19): v4 Turbo and v3 ignore the speed setting (same 4.39 s sentence at 1.0 and 1.2); Flash v2.5
+# honours it and is quicker anyway (3.17 s at 1.0, 2.36 s at 1.2). Same 0.5 credit per character.
+ELEVEN_STYLE = {"eleven-sarah-quick": ("eleven_flash_v2_5", 1.02), "eleven-chris-quick": ("eleven_flash_v2_5", 1.02)}
 # Nov 19: eleven_v4_turbo (free tier OK, same 0.5 credit/char, first sound ~0.5 s like v3) chosen by ear; it also
 # accepts previous_text, so the sentence pieces keep one intonation. DEMO_ELEVEN_MODEL=eleven_v3_conversational = old voice.
 ELEVEN_MODEL = os.environ.get("DEMO_ELEVEN_MODEL", "eleven_v4_turbo")
@@ -349,7 +355,7 @@ class ScribeLive:
         self.on_partial = on_partial
         self._commit_waiter = None
         self.agent_lines, self.agent_words = [], set()
-        self.recent = collections.deque(maxlen=50 * 4)  # the last 4 s of mic frames, to send a held-back burst
+        self.recent = collections.deque(maxlen=50 * 6)  # the last 6 s of mic frames, to send a held-back burst
         self.held = False
         self._zeros = np.zeros(320, dtype="<i2").tobytes()
 
@@ -397,8 +403,8 @@ class ScribeLive:
         hold = the agent is talking and our engine has not stopped it. On speakers the mic then hears the agent, and
         Scribe wrote its lines into the caller's turn, even short ones the text filter cannot tell apart («هلا والله»,
         «يناسبك؟», Nov 19). So while held, Scribe gets silence. When the hold ends (the engine said STOP, or the agent
-        finished while the caller was mid-word), the caller's burst is sent from its start (burst_frames = its length
-        in frames): the words that made us stop are never lost."""
+        finished while the caller was mid-word), the caller's burst is sent from 400 ms before its start (burst_frames = its
+        length in frames, even when it already ended): the words that made us stop are never lost."""
         if not self.ok:
             return
         self.recent.append(frame)
@@ -407,7 +413,7 @@ class ScribeLive:
             self.buf.append(self._zeros)
         elif self.held:
             self.held = False
-            n = min(burst_frames + 5, len(self.recent)) if burst_frames else 1   # + 100 ms before the burst
+            n = min(burst_frames + 20, len(self.recent)) if burst_frames else 1  # + 400 ms before it, as Whisper gets
             self.buf += [f.tobytes() for f in list(self.recent)[-n:]]
         else:
             self.buf.append(frame.tobytes())
@@ -512,15 +518,18 @@ def haiku_stream(history, scenario, on_sentence, cancelled, model=CHAT_MODEL):
         return full, f"LLM stream failed: {ex!r}"[:160]
 
 
-def eleven_speak(text, voice_id, previous_text, on_chunk, cancelled):
+def eleven_speak(text, voice_id, previous_text, on_chunk, cancelled, model=None, speed=None):
     """Speak one piece with ElevenLabs, streamed as pcm16 at 16 kHz. -> error or None."""
     key = _env("ELEVENLABS_API_KEY")
     if not key:
         return "no ELEVENLABS_API_KEY (.env)"
-    body = {"text": text, "model_id": ELEVEN_MODEL, "language_code": "ar"}
+    model = model or ELEVEN_MODEL
+    body = {"text": text, "model_id": model, "language_code": "ar"}
+    if speed:
+        body["voice_settings"] = {"speed": speed}
     # previous_text keeps the intonation continuous across pieces, but the v3 models reject it with a 400 (only the first
     # piece of every reply was spoken, Nov 18): send it only to the older models, and retry once without it on a 400
-    if previous_text and not ELEVEN_MODEL.startswith("eleven_v3"):
+    if previous_text and not model.startswith("eleven_v3"):
         body["previous_text"] = previous_text[-300:]
     try:
         c = http.client.HTTPSConnection("api.elevenlabs.io", timeout=15)
@@ -726,7 +735,8 @@ async def handler(ws):
             spoken.append(s)
             chat.agent_text = " ".join(spoken)
             push({"type": "agent_text", "speech": sid, "text": chat.agent_text})
-            err = eleven_speak(s, ELEVEN_VOICES[chat.voice], " ".join(spoken[:-1]), on_chunk, cancelled)
+            err = eleven_speak(s, ELEVEN_VOICES[chat.voice], " ".join(spoken[:-1]), on_chunk, cancelled,
+                               *ELEVEN_STYLE.get(chat.voice, (None, None)))
             if err:
                 res["tts_err"] = err
                 push({"type": "info", "text": f"voice failed on «{s}»: {err}"})   # never go silent without a trace
@@ -851,7 +861,10 @@ async def handler(ws):
                     chat.add_frame(caller)
                 if live is not None:
                     hold = bool(getattr(decider, "agent_talking", False)) and not getattr(decider, "stopped", False)
-                    burst = (system._n - system._burst_start) // 320 if system._in_burst else 0
+                    # after a STOP: the burst that caused it, even if it already ended (Whisper's last look comes after
+                    # the burst; «دقيقة معلش، خلّي يوم الثلاثاء» was over before the STOP and was lost, Nov 19)
+                    stopped_now = getattr(decider, "stopped", False)
+                    burst = (system._n - system._burst_start) // 320 if (system._in_burst or stopped_now) else 0
                     live.feed(caller, hold, burst)
                 if len(recording) < 50 * 600:           # at most 10 minutes per call
                     recording.append(caller.copy())

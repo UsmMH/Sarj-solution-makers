@@ -131,7 +131,14 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
 - Echo in live Scribe (Nov 19): on speakers the agent's lines (even short ones «هلا والله», «يناسبك؟») landed in the
   caller's bubbles. Now `ScribeLive.feed(frame, hold, burst_frames)` sends silence while the agent talks and the engine
   has not stopped it; on STOP (or the agent ending mid-burst) the caller's burst is sent from its start (+100 ms).
-  The clause filter stays as a second layer.
+  The clause filter stays as a second layer. Release = the STOP's burst even if it already ended (+400 ms before):
+  Whisper's STOP often lands after the caller finished («دقيقة معلش، خلّي يوم الثلاثاء» was lost, then replayed
+  word for word from `demo_recordings/call-002228.wav`).
+- Writer prompt (Nov 19): straight to the point, at most one courtesy phrase, usually one sentence < 12 words, short
+  goodbye, name Sarah (it said «فلانة»). Replies went from ~30 to 7-10 words. Voice menu adds "quick speech" voices:
+  Flash v2.5 at speed 1.02 (`ELEVEN_STYLE`; 1.05-1.2 were too quick by ear); v4 Turbo and v3 ignore `voice_settings.speed`.
+- Seen in that call (scored system, NOT changed): Whisper wrote «تقيقة» for «دقيقة» at 1.3 s; the same-first-letter
+  rule rejected it and the STOP came at 1.7 s. A ت/د allowance would need a replay of all logged decodes first.
 - Mic lesson: the Razer BlackShark V2 path had a noise gate (16-22 % exact digital silence, chopped words); the laptop mic had 0 %. For Day 6 use the laptop mic or a plain USB mic and test it on the demo machine.
 
 ## Write-up (WRITEUP.md, due by the freeze) must declare
