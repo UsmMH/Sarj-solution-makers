@@ -713,6 +713,7 @@ async def handler(ws):
     silent = np.zeros(320, dtype=np.int16)
     n = 0
     chat = None                                         # a Conversation in free-call mode, else None
+    scribe_mode = False                                 # Scribe stop mode is on for THIS call (headphones only)
     live = None                                         # ScribeLive stream for the caller's words (free call, "live")
     recording = []                                      # every mic frame of the current call, saved when it ends
 
@@ -725,6 +726,15 @@ async def handler(ws):
             w.setnchannels(1), w.setsampwidth(2), w.setframerate(SR), w.writeframes(np.concatenate(recording).tobytes())
         push({"type": "info", "text": f"mic audio saved: {path.name} ({len(recording) * 20 / 1000:.0f} s)"})
         recording.clear()
+
+    def sync_agent_text(text):
+        """The agent's line grows sentence by sentence while it speaks, but the engine only got the first piece when the
+        voice started. Keep the engine's and live Scribe's copy of the current line up to date, so the agent's own voice
+        coming back through the speakers is recognised as echo (loud speakers, Nov 19) and never stops the agent."""
+        if system.agent_talking and system.agent_hist:
+            system.agent_hist[-1] = text
+        if live is not None:
+            live.agent_said(text)
 
     def transcribe_turn(audio, stt):
         """Blocking (never on the event loop): the caller's finished turn as text -> (text, source, notes).
@@ -804,6 +814,7 @@ async def handler(ws):
                 continue
             spoken.append(s)
             chat.agent_text = " ".join(spoken)
+            loop.call_soon_threadsafe(sync_agent_text, chat.agent_text)
             push({"type": "agent_text", "speech": sid, "text": chat.agent_text})
             err = eleven_speak(s, ELEVEN_VOICES[chat.voice], " ".join(spoken[:-1]), on_chunk, cancelled,
                                *ELEVEN_STYLE.get(chat.voice, (None, None)))
@@ -883,6 +894,7 @@ async def handler(ws):
             def on_text(said):                          # the transcript of what the voice is saying, as it grows
                 if chat.speech_id == sid:
                     chat.agent_text = said
+                    loop.call_soon_threadsafe(sync_agent_text, said)
                     push({"type": "agent_text", "speech": sid, "text": said})
 
             if written:                                 # step 2: the voice only READS Haiku's line
@@ -991,7 +1003,7 @@ async def handler(ws):
                     # the burst; «دقيقة معلش، خلّي يوم الثلاثاء» was over before the STOP and was lost, Nov 19)
                     stopped_now = getattr(decider, "stopped", False)
                     burst = (system._n - system._burst_start) // 320 if (system._in_burst or stopped_now) else 0
-                    if SCRIBE_STOP and decider is system:
+                    if scribe_mode and decider is system:
                         live.feed(caller)               # never muted: its words can stop the agent
                         scribe_stop_step(caller)
                     else:
@@ -1062,10 +1074,13 @@ async def handler(ws):
                 for s in both:
                     s.on_scenario_start({"use_case": "free call", "language": "ar"})
                 push({"type": "info", "text": "free call started: " + chat.scenario})
+                scribe_mode = SCRIBE_STOP and live is not None and msg.get("audio") == "headphones"
                 if SCRIBE_STOP:
-                    push({"type": "info", "text": "SCRIBE STOP MODE (demo only): live Scribe's words can also stop the agent; "
-                          "the scored system decides with Whisper alone" if live is not None else
-                          "Scribe stop mode needs 'Your words: live' (it is off for this call)"})
+                    push({"type": "info", "text": (
+                        "SCRIBE STOP MODE (demo only): live Scribe's words can also stop the agent; the scored system decides "
+                        "with Whisper alone" if scribe_mode else
+                        "Scribe stop mode is OFF for this call: it needs headphones (on speakers the agent's own voice would "
+                        "be read as yours) and 'Your words: live'")})
                 asyncio.create_task(agent_speaks("ألو؟"))       # the customer picks up
             elif t == "chat_silence" and chat is not None:   # the page's timer: no answer since the agent's line
                 # only if the caller really stayed silent: the timer counts from the agent's last word and cannot know
@@ -1082,7 +1097,7 @@ async def handler(ws):
                 for s in both:
                     s.on_agent_end()
                 kept = ss.pop("kept", None)
-                if SCRIBE_STOP and live is not None and not stopped and kept and time.perf_counter() - kept[1] < 1.5:
+                if scribe_mode and live is not None and not stopped and kept and time.perf_counter() - kept[1] < 1.5:
                     live.turn[:] = [kept[0]]            # said over the agent's last words: that is the caller's answer
                     system.caller_spoke = True
                     system.quiet_ms = int((time.perf_counter() - kept[1]) * 1000)

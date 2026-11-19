@@ -83,8 +83,9 @@
   .progress { height: 3px; background: var(--meter); border-radius: 2px; margin-top: 8px; overflow: hidden; }
   .progress > div { height: 100%; width: 0; background: var(--accent-text); }
   #livetext { font: 400 16px/1.6 var(--font-ar); color: var(--you); min-height: 1.5em; margin-top: 8px; direction: rtl; text-align: right; }
-  .quick { display: flex; gap: 10px; align-items: end; margin-top: 12px; flex-wrap: wrap; }
-  .quick label.f { flex: 1 1 260px; }
+  .nowhead { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .quick { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .quick select { width: auto; max-width: 290px; min-height: 32px; padding: 4px 10px; font-size: 13px; }
   .actions { display: flex; flex-direction: column; gap: 10px; min-width: 160px; }
   button { font: inherit; font-size: 14.5px; padding: 9px 16px; min-height: 40px; border-radius: 6px; border: 1px solid var(--line);
            background: transparent; color: var(--ink); cursor: pointer; transition: background .15s, border-color .15s, transform .05s; }
@@ -99,6 +100,9 @@
   /* main grid */
   .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
   .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  /* both columns end at the same line: the timeline card takes whatever height the conversation card has left over */
+  .side > .card:first-child { flex: 1; display: flex; flex-direction: column; }
+  .side > .card:first-child canvas { flex: 1 1 150px; height: auto; min-height: 150px; }
 
   /* chat */
   .chat { display: flex; flex-direction: column; gap: 10px; height: 470px; overflow-y: auto; padding: 4px 2px; scroll-behavior: smooth; }
@@ -209,13 +213,13 @@
   <section class="card hero">
     <div id="state" class="status idle" role="status" aria-live="polite"><div class="dot"></div><div class="en" id="stateEn">READY</div><div class="arl ar" id="stateAr">جاهز</div></div>
     <div class="now">
-      <div class="label" id="uttlabel">agent</div>
+      <div class="nowhead">
+        <div class="label" id="uttlabel">agent</div>
+        <label class="quick free-only"><span>Scenario</span><select id="preset" aria-label="Ready-made scenario"></select></label>
+      </div>
       <div class="sentence" id="sentence">—</div>
       <div class="progress"><div id="prog"></div></div>
       <div id="livetext" aria-live="polite"></div>
-      <div class="quick free-only">
-        <label class="f">Scenario<select id="preset" aria-label="Ready-made scenario"></select></label>
-      </div>
     </div>
     <div class="actions">
       <button id="start" class="primary" disabled>Start call <kbd>Enter</kbd></button>
@@ -475,12 +479,13 @@ $("theme").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % 3]; ap
 function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
 function drawTimeline() {
   const c = $("tl"), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
-  if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
   const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
   const T = tnow(), x = t => (1 - (T - t) / WINDOW_S) * (w - 54) + 54;
-  const laneA = [22, 46], laneY = [78, 130];
-  g.font = "12px Segoe UI, system-ui, sans-serif"; g.fillStyle = cssVar("--muted");
-  g.fillText("Agent", 0, 38); g.fillText("You", 0, 108);
+  const sc = Math.max(1, h / 150);                       // the card can be taller than 150 px: the lanes spread out
+  const laneA = [22 * sc, 46 * sc], laneY = [78 * sc, 130 * sc];
+  g.font = "12px Geist, Segoe UI, system-ui, sans-serif"; g.fillStyle = cssVar("--muted");
+  g.fillText("Agent", 0, 38 * sc); g.fillText("You", 0, 108 * sc);
   g.strokeStyle = cssVar("--line"); g.lineWidth = 1;
   for (let s = 0; s <= WINDOW_S; s += 5) { const xx = x(T - s); g.beginPath(); g.moveTo(xx, 14); g.lineTo(xx, h - 4); g.stroke(); }
   g.fillStyle = cssVar("--accent");
@@ -510,6 +515,7 @@ function drawTimeline() {
 }
 function agentOn() { if (!agentSegs.length || agentSegs[agentSegs.length - 1].e != null) agentSegs.push({s: tnow(), e: null}); }
 function agentOff() { if (agentSegs.length && agentSegs[agentSegs.length - 1].e == null) agentSegs[agentSegs.length - 1].e = tnow(); }
+if (window.ResizeObserver) new ResizeObserver(() => drawTimeline()).observe($("tl"));   // the canvas follows its card's height
 
 // --- engineer log ---------------------------------------------------------------------------------------------
 function addRow(kind, ar, why, cls) {
@@ -787,7 +793,7 @@ async function startCall() {
   $("start").disabled = true; $("hang").disabled = false; $("settings").open = false;
   for (const id of ["call", "mode", "audio", "stt", "writer", "voice", "scenario"]) $(id).disabled = true;
   if (free) {
-    ws.send(JSON.stringify({type: "chat_start", scenario: $("scenario").value, voice: $("voice").value, stt: $("stt").value,
+    ws.send(JSON.stringify({type: "chat_start", audio: $("audio").value, scenario: $("scenario").value, voice: $("voice").value, stt: $("stt").value,
                             writer: $("writer").value}));
     setState("thinking"); $("sentence").textContent = "…";
     return;
