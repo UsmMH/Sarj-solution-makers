@@ -266,6 +266,8 @@
         <label class="f dev-only">Recorded call
           <select id="call"></select></label>
       </div>
+      <label class="f free-only" style="margin-top:12px">Ready-made scenarios
+        <select id="preset"></select></label>
       <label class="f free-only" style="margin-top:12px">Scenario (empty = dental clinic reminder)
         <textarea id="scenario" rows="2" dir="rtl" placeholder="مثال: عيادة النخبة تذكّر العميل بموعده يوم الأحد الساعة عشرة الصبح"></textarea></label>
       <div class="hint">Speakers: the browser removes the agent's own voice from the mic (for watching together). Headphones: the cleanest audio, best for one person.</div>
@@ -298,6 +300,32 @@
 </main>
 
 <script>
+// Ready-made scenarios for the free call: the agent phones the caller, so each one says who is calling and what for.
+// Short on purpose: the agent keeps to the goal all call long. Pick one and the text box below is filled in.
+const PRESETS = [
+  ["Pick a scenario…", ""],
+  ["Dental clinic: appointment reminder",
+   "عيادة أسنان تذكّر العميل بموعده يوم الأحد الساعة عشرة الصبح وتسأله إذا يقدر يحضر؛ إذا ما يناسبه اعرض عليه الاثنين أو الثلاثاء العصر."],
+  ["Delivery: is anyone home?",
+   "شركة توصيل تتصل تأكد على العميل توصيل طلبه اليوم بين أربعة وستة المغرب، وتسأله إذا فيه أحد في البيت؛ إذا لا، اعرضي عليه بكرة الصبح."],
+  ["Restaurant: confirm a booking",
+   "مطعم يأكد حجز طاولة لأربعة أشخاص يوم الخميس الساعة تسعة بالليل باسم العميل، ويسأله إذا يبي يغير الوقت أو عدد الأشخاص."],
+  ["Bank: was this purchase you?",
+   "بنك يتصل للتأكد من عملية شراء بمبلغ ثمانمئة وخمسين ريال من متجر إلكتروني، ويسأل العميل إذا هو اللي سواها. لا تطلبين رقم البطاقة ولا الرمز السري ولا أي رمز تحقق أبداً، وإذا قال إنها مو منه قولي له إن البطاقة بتنوقف وبيتواصل معه الفرع."],
+  ["Internet company: renewal offer",
+   "شركة إنترنت تذكّر العميل إن باقته تنتهي نهاية الأسبوع، وتعرض عليه باقة أسرع بسعر أقل إذا جدد اليوم."],
+  ["Car workshop: service reminder",
+   "ورشة صيانة سيارات تذكّر العميل بموعد الصيانة الدورية يوم الثلاثاء الساعة إحدى عشر الصبح، وتسأله إذا يبي يغير الموعد."],
+  ["Shipping: read me the order number (tests long pauses)",
+   "شركة شحن تتصل تتأكد من شحنة العميل وتطلب منه رقم الطلب عشان تطابقه؛ الرقم من ثمان خانات وغالباً يقرأه على دفعات مع وقفات، فاصبري عليه ولا تقاطعينه، وإذا خلص كرري الرقم عليه للتأكيد."],
+  ["Clinic: new booking (the caller has to think)",
+   "عيادة جلدية تحجز موعد جديد للعميل؛ اسأليه بالترتيب: وش اليوم المناسب له، ثم الفترة (صباح أو عصر)، ثم الاسم، وكل مرة سؤال واحد فقط وانتظري إجابته."],
+];
+(() => {
+  const sel = document.getElementById("preset"), box = document.getElementById("scenario");
+  PRESETS.forEach(([name, text], i) => { const o = document.createElement("option"); o.value = i; o.textContent = name; sel.appendChild(o); });
+  sel.addEventListener("change", () => { box.value = PRESETS[sel.value][1]; });
+})();
 const $ = id => document.getElementById(id);
 const MIN_DB = -70, MAX_DB = 0;
 let ws, calls = [], call = null, idx = 0, ctx, micNode, src = null, speaking = false, inCall = false;
