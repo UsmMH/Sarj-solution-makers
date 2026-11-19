@@ -67,18 +67,21 @@ faster-whisper (CTranslate2), NumPy, websockets. Model: `mobiuslabsgmbh/faster-w
 
 A live browser demo (`demo.py`) runs the same system on a microphone, with either the real agent sentences of the dev
 calls or a free conversation with a voice agent. Around the scored engine it adds three cloud layers, demo only:
-ElevenLabs real-time transcription of the caller's words (silenced while the agent speaks, so the agent's own voice is
-not written as the caller's; after a STOP it receives the burst that caused it), Claude Haiku writing short Saudi-style
-replies sentence by sentence, and an ElevenLabs voice speaking each sentence as it arrives. STOP cuts the voice at once;
-the agent answers about 2.0-2.5 s after the caller goes quiet. It is not part of the scored system.
+ElevenLabs real-time transcription of the caller's words, Claude Haiku writing short Saudi-style replies sentence by
+sentence, and a Saudi voice (ElevenLabs Voice Library or Munsit) speaking each sentence as it arrives. STOP cuts the
+voice at once; the agent answers about 2.0-2.5 s after the caller goes quiet. Two demo-only extras, both labelled on the
+page: an optional **Scribe stop mode** (`--stop scribe`), where the live transcript can also trigger STOP through the
+same rules and loudness gates (it reads the first word of a hard voice better than Whisper), and a longer wait before
+taking the turn (1.5 s, 3.2 s when the live text ends mid-word) because a person talking freely pauses to think. The
+scored system decides with local Whisper alone; none of this is part of it.
 
 ## 4. Speed and cost
 
 | | |
 |---|---|
-| Median stop latency on the dev set (real-time run, from the report) | 461 ms after the intent was evident (p90 794 ms), run `pad-clean` |
-| Where that time goes (each stage, roughly) | 300 ms of burst before the first decode; Whisper decode median 294 ms (p90 313 ms); up to 100 ms waiting for the next decode slot; harness round trip ~1 ms |
-| Hardware it ran on, and how busy it was | Windows laptop, NVIDIA RTX 3060 Ti laptop GPU (6 GB), ~2.4 GB GPU memory used; must run on mains power (on battery, decodes are ~35 % slower) |
+| Median stop latency on the dev set (real-time run, from the report) | 416 ms after the intent was evident (p90 754 ms), final commit `d12ca5b`. Through an internet tunnel (practice checkpoint) the harness round trip was ~187 ms, which adds about half of that to every decision. |
+| Where that time goes (each stage, roughly) | 300 ms of burst before the first decode; Whisper decode median ~280 ms; up to 100 ms waiting for the next decode slot; harness round trip ~1 ms on a local network |
+| Hardware it ran on, and how busy it was | Windows laptop, NVIDIA RTX 3060 Laptop GPU (6 GB), ~2.4 GB GPU memory used; must run on mains power (on battery, decodes are ~35 % slower) |
 | Model sizes | Whisper large-v3-turbo, ~809 M parameters, ~1.6 GB in float16 |
 | Cloud calls per minute of audio, and their typical delay | 0 (fully local) |
 | What it would cost to run on a real call | One mid-range GPU serves one call in real time with headroom; Whisper only runs while the caller speaks over the agent or just after their turn. No per-minute API cost. |
@@ -92,7 +95,22 @@ Score 95.0 / 100   (stops when it should: 0.94, keeps talking when it should: 1.
 21 right, 5 could be faster, 3 wrong (the 3 wrong are end-of-turn cases, not in the total)
 ```
 
-Baseline B1: **41.0**. Our system: **95.0**: every real interruption stopped, no false stop.
+Baseline B1: **41.0**. Our system: **95.0**: every real interruption stopped, no false stop. The frozen commit
+(`d12ca5b`) gives the same 95.0 on a fresh run. A 30-minute soak (the 24 calls three times: clean, caller −12 dB, caller
++6 dB; 72 calls, one session, like the 64–80-scenario final) scored **94.3** with 0 false stops, so nothing degrades over
+a long stream.
+
+**What the words buy us.** The same server run with Whisper unavailable falls back to a loudness rule and scores **86.1**
+(R 0.87, S 0.82: six false stops, on backchannels, background sound and a cough). Understanding the words adds about nine
+points and removes every false stop on the dev calls. (We found this by accident: the server had been started without
+its Python environment, which also showed us that the fallback never retries Whisper; that is on our fix list.)
+
+**Dialect and noise (dev set, `python -m ttbench.summary`).** Najdi calls (12): R 0.92, S 1.00. Other dialects (12:
+Hijazi, Eastern, Southern, Northern Saudi, Kuwaiti, Emirati, Qatari, Bahraini): R 0.94, S 1.00. Dialect gap −0.01, in
+favour of the other dialects: our rules are lexical Gulf cues, not Najdi-specific, and Whisper large-v3-turbo handled
+them well. Clean audio (13): F 0.98; noisy or phone (11): F 0.95, a noise gap of 0.03. The DV category (Kuwaiti, Emirati)
+passes completely. Caveat: with 1–3 calls per category these gaps are not statistically solid; on our 58 team calls (more
+voices, other scripts) R dropped to 0.53, so unseen speakers are the real risk, not dialect as such.
 
 Because we tuned on these 24 calls, we also ran copies that we changed on purpose (only the caller channel, so labels
 stay exact), to check that the system does not depend on how this recording happens to sound:
@@ -159,7 +177,9 @@ second; more Gulf phrases collected from many speakers through the live demo.
 | Library | faster-whisper, CTranslate2, NVIDIA cuBLAS / cuDNN 12 (pip wheels) | running Whisper on the GPU |
 | Model | `Systran/faster-whisper-small` | early recognition probes only, not in the final system |
 | API | ElevenLabs: `scribe_v3_live` (real-time) and `scribe_v1` (batch) speech-to-text | live demo only: the caller's words for the agent's reply (not in the scored system) |
-| API | ElevenLabs text-to-speech: `eleven_v4_turbo`, `eleven_flash_v2_5`, built-in voices Sarah and Chris | live demo only: the agent's voice |
+| API | ElevenLabs text-to-speech: `eleven_v4_turbo`, `eleven_flash_v2_5`, built-in voices Sarah and Chris, and Saudi Voice Library voices (Abir, Hala, Maryam, Jumana) | live demo only: the agent's voice |
+| API | Munsit (CNTXT AI): Faseeh `faseeh-v1-preview` text-to-speech (Najdi and Hijazi voices); `audio/transcribe` speech-to-text tested in comparison only | live demo option for the voice; the speech-to-text was a comparison (not used) |
+| Tool | Cloudflare `cloudflared` quick tunnel | only to reach our laptop from the organisers' practice checkpoint |
 | API | OpenRouter: `anthropic/claude-haiku-5.5` | live demo: writes the agent's replies; earlier, LLM STOP/KEEP judge experiment (dropped) |
 | API | OpenRouter: `google/gemini-2.5-flash-lite` (writer), `google/gemini-2.5-flash` (transcription) | live demo options |
 | API | OpenRouter: `openai/gpt-audio-mini` | live demo fallback voice (writes and speaks when ElevenLabs fails) |
@@ -169,7 +189,8 @@ second; more Gulf phrases collected from many speakers through the live demo.
 | Model | `oddadmix/whisper-large-v3-turbo-arabic-dialectal-v2` (Apache 2.0), converted to CTranslate2 | tested as an alternative recogniser, not used in the final system |
 | Data | Sarj development set (24 calls) and our own changed copies of it (caller volume ±6/12 dB, loud start, mic click) | development and stress tests |
 | Data | Our team's generated calls (58 calls, ElevenLabs agent voices, recorded caller lines) | unseen test set only, never used to set numbers |
+| Data | Our team's second batch (38 calls, ElevenLabs voices; `SARJ_TRAINING_DATASET/team_v4`) | built by the team for testing; not used for any number in this write-up. No private recordings or customer data. |
 
 ## 9. Team
 
-Team 4: Usama (system and evaluation) and team members (names to be added before hand-in).
+Team 4 (for now :D): Usama, Rayan Bin Malik, Nada Alosaimi, Rana Alamri and Lena Alhaobani.
