@@ -42,8 +42,8 @@ from ttbench.dataset import read_wav_stereo
 # Demo only (this process; the scored my_system.py is untouched): a person talking freely pauses to think, so the demo
 # waits longer before taking the turn than the benchmark baseline (700 ms). The reply draft still starts at 300 ms of
 # silence and is ready after ~2 s anyway, so a later TAKE_TURN costs almost no reply time.
-my_system.TAKE_TURN_AFTER_MS = int(os.environ.get("DEMO_TURN_WAIT_MS", "1200"))
-my_system.EOT_HOLD_MS = int(os.environ.get("DEMO_EOT_HOLD_MS", "2000"))
+my_system.TAKE_TURN_AFTER_MS = int(os.environ.get("DEMO_TURN_WAIT_MS", "1500"))    # text sounds finished (was 1200 on Nov 19)
+my_system.EOT_HOLD_MS = int(os.environ.get("DEMO_EOT_HOLD_MS", "3200"))            # text ends mid-thought: «يوم الـ..», «آآ،»
 
 HERE = Path(__file__).parent
 DATA = HERE / "data" / "dev"
@@ -294,6 +294,11 @@ QUICK_SPEED = float(os.environ.get("DEMO_QUICK_SPEED", "1.1"))      # the Saudi 
 for _k in [k for k in ELEVEN_VOICES if k.startswith("saudi-")]:
     ELEVEN_VOICES[_k + "-quick"] = ELEVEN_VOICES[_k]
     ELEVEN_STYLE[_k + "-quick"] = ("eleven_flash_v2_5", QUICK_SPEED)
+# Munsit (Faseeh) native Saudi voices, "munsit:" + voice id (Nov 19): speak through munsit_speak() below
+ELEVEN_VOICES.update({"munsit-nora": "munsit:sa-nora-vo-f", "munsit-maha": "munsit:IPK8qQ3F5NMiQLWFz1a83TG3",
+                      "munsit-hala": "munsit:08XOzRjaaumxbHhcGOrWkJ7z", "munsit-lama": "munsit:ar-hijazi-female-1",
+                      "munsit-noura": "munsit:ar-najdi-female-1"})
+# no "quick" Munsit voices: voice_settings.speed 1.1 left the audio length unchanged over REST (3.4 s both, Nov 19)
 # Nov 19: eleven_v4_turbo (free tier OK, same 0.5 credit/char, first sound ~0.5 s like v3) chosen by ear; it also
 # accepts previous_text, so the sentence pieces keep one intonation. DEMO_ELEVEN_MODEL=eleven_v3_conversational = old voice.
 ELEVEN_MODEL = os.environ.get("DEMO_ELEVEN_MODEL", "eleven_v4_turbo")
@@ -533,8 +538,40 @@ def haiku_stream(history, scenario, on_sentence, cancelled, model=CHAT_MODEL):
         return full, f"LLM stream failed: {ex!r}"[:160]
 
 
+def munsit_speak(text, voice_id, on_chunk, cancelled, speed=None):
+    """Speak one piece with Munsit (Faseeh, native Saudi voices). The REST call returns the finished piece (no streaming:
+    ~0.8-1.1 s for a short sentence, ~1.8 s for 7 s of speech), asked at 16 kHz mono so it plays as is. -> error or None."""
+    key = _env("MUNSIT_API_KEY")
+    if not key:
+        return "no MUNSIT_API_KEY (.env)"
+    body = {"voice_id": voice_id, "text": text, "sample_rate": ELEVEN_RATE}
+    if speed:
+        body["voice_settings"] = {"speed": speed}
+    try:
+        c = http.client.HTTPSConnection("api.munsit.com", timeout=20)
+        c.request("POST", "/api/v1/text-to-speech/faseeh-v1-preview", json.dumps(body, ensure_ascii=False).encode(),
+                  {"x-api-key": key, "Content-Type": "application/json"})
+        r = c.getresponse()
+        data = r.read()
+        if r.status != 200:
+            return f"Munsit error {r.status}: {data[:120]!r}"
+        with wave.open(io.BytesIO(data)) as w:
+            if w.getframerate() != ELEVEN_RATE or w.getnchannels() != 1:
+                return f"Munsit sent {w.getframerate()} Hz x{w.getnchannels()}, expected {ELEVEN_RATE} Hz mono"
+            pcm = w.readframes(w.getnframes())
+        for i in range(0, len(pcm), 3200):
+            if cancelled():
+                return None
+            on_chunk(pcm[i:i + 3200])
+        return None
+    except Exception as ex:
+        return f"Munsit failed: {ex!r}"[:160]
+
+
 def eleven_speak(text, voice_id, previous_text, on_chunk, cancelled, model=None, speed=None):
     """Speak one piece with ElevenLabs, streamed as pcm16 at 16 kHz. -> error or None."""
+    if voice_id.startswith("munsit:"):                  # a Munsit voice shares the menu and the reply loop
+        return munsit_speak(text, voice_id[7:], on_chunk, cancelled, speed)
     key = _env("ELEVENLABS_API_KEY")
     if not key:
         return "no ELEVENLABS_API_KEY (.env)"
