@@ -35,9 +35,15 @@ from difflib import SequenceMatcher
 
 import my_system
 from llm_judge import _read_key
-from turn_rules import _close, normalize, tokens
+from turn_rules import _close, decide, eot_incomplete, normalize, tokens
 from my_system import ASR, FLOOR_PERCENTILE, LOUD_DB, MySystem, loudness_db
 from ttbench.dataset import read_wav_stereo
+
+# Demo only (this process; the scored my_system.py is untouched): a person talking freely pauses to think, so the demo
+# waits longer before taking the turn than the benchmark baseline (700 ms). The reply draft still starts at 300 ms of
+# silence and is ready after ~2 s anyway, so a later TAKE_TURN costs almost no reply time.
+my_system.TAKE_TURN_AFTER_MS = int(os.environ.get("DEMO_TURN_WAIT_MS", "1200"))
+my_system.EOT_HOLD_MS = int(os.environ.get("DEMO_EOT_HOLD_MS", "2000"))
 
 HERE = Path(__file__).parent
 DATA = HERE / "data" / "dev"
@@ -118,6 +124,8 @@ CHAT_PROMPT = """أنت موظفة خدمة عملاء سعودية في مكا�
 - كلام العميل جاي من نظام تعرّف صوت وممكن يكون فيه أخطاء؛ إذا ما فهمتي، اطلبي منه يعيد بلطف.
 - إذا جملتك السابقة تنتهي بـ «…» يعني العميل قاطعك هنا: ردي على كلامه، لا تعيدين جملتك.
 - إذا كلام العميل «…» يعني سكت وما رد: اسأليه بلطف إذا يسمعك.
+- ما تعرفين إذا العميل رجّال أو حرمة، فلا تخاطبينه بصيغة مذكر ولا مؤنث («تفضّل/تفضّلي»، «معك/معكِ»)؛
+  استخدمي صيغ تناسب الاثنين («وش السؤال؟»، «يناسبك؟»)، إلا إذا عرفتي جنسه من كلامه.
 - اسمك سارة. قولي دورك فقط ثم وقفي، لا تجاوبين عن العميل ولا تخترعين أسماء ثانية.
 - إذا خلصت المهمة ودّعيه وختمي بـ «مع السلامة»."""
 DEFAULT_SCENARIO = ("عيادة أسنان تذكّر العميل بموعده يوم الأحد الساعة عشرة الصبح وتسأله إذا يقدر يحضر؛ "
@@ -275,10 +283,17 @@ def cloud_transcribe(audio):
 # Voice Library voices (Saudi ones) through the API (402 paid_plan_required). Scribe v1 on a noisy laptop-mic call:
 # «دقيقة ما أسمعك عيدها مرة ثانية…» where Whisper heard «دقيقة ما اسمع كايدين مالساني», ~1.1-2 s per turn.
 ELEVEN_VOICES = {"eleven-sarah": "EXAVITQu4vr4xnSDxMaL", "eleven-chris": "iP95p4xoKVk53GoZ742B",
-                 "eleven-sarah-quick": "EXAVITQu4vr4xnSDxMaL", "eleven-chris-quick": "iP95p4xoKVk53GoZ742B"}
+                 "eleven-sarah-quick": "EXAVITQu4vr4xnSDxMaL", "eleven-chris-quick": "iP95p4xoKVk53GoZ742B",
+                 # Saudi Voice Library voices (paid plan, Nov 19): they speak through the API without being added to the account
+                 "saudi-abir": "VcSFj5ljnKA0aQcxeHpl", "saudi-hala": "2aVe3IK7dgUBaUTdfarw",
+                 "saudi-maryam": "aMmeBf0lzDYlouyfqNjh", "saudi-jumana": "4uJbyDJGijiDphW2T3vP"}
 # "quick" voices (Nov 19): v4 Turbo and v3 ignore the speed setting (same 4.39 s sentence at 1.0 and 1.2); Flash v2.5
 # honours it and is quicker anyway (3.17 s at 1.0, 2.36 s at 1.2). Same 0.5 credit per character.
-ELEVEN_STYLE = {"eleven-sarah-quick": ("eleven_flash_v2_5", 1.02), "eleven-chris-quick": ("eleven_flash_v2_5", 1.02)}
+ELEVEN_STYLE = {"eleven-sarah-quick": ("eleven_flash_v2_5", 1.01), "eleven-chris-quick": ("eleven_flash_v2_5", 1.01)}
+QUICK_SPEED = float(os.environ.get("DEMO_QUICK_SPEED", "1.1"))      # the Saudi "quick" voices (Flash v2.5 honours speed)
+for _k in [k for k in ELEVEN_VOICES if k.startswith("saudi-")]:
+    ELEVEN_VOICES[_k + "-quick"] = ELEVEN_VOICES[_k]
+    ELEVEN_STYLE[_k + "-quick"] = ("eleven_flash_v2_5", QUICK_SPEED)
 # Nov 19: eleven_v4_turbo (free tier OK, same 0.5 credit/char, first sound ~0.5 s like v3) chosen by ear; it also
 # accepts previous_text, so the sentence pieces keep one intonation. DEMO_ELEVEN_MODEL=eleven_v3_conversational = old voice.
 ELEVEN_MODEL = os.environ.get("DEMO_ELEVEN_MODEL", "eleven_v4_turbo")
@@ -608,12 +623,30 @@ class DemoSystem(MySystem):
     def __init__(self, push, shadow=False):
         self._to_page = push                            # not "_push": MySystem._push stores the caller audio
         self._shadow = shadow                           # True: another system decides, we only show what we hear
+        self.scribe_text = None                         # free call with live Scribe: a function giving the turn's text so far
         super().__init__()
 
     def _log(self, line):
         super()._log(line)
         self._to_page({"type": "log", "line": line, "shadow": self._shadow})
 
+    def _eot_ready(self, smart):
+        """Demo only: Whisper's text of a short pause is often garbled («ممكن يوم الاربع») and then looks finished.
+        Live Scribe's text is accurate and keeps what a hesitating caller says: «آااه،», «يووم الأربعاء-». If it ends
+        mid-thought, wait the longer time before taking the turn."""
+        ready = super()._eot_ready(smart)
+        if ready and self.scribe_text is not None:
+            try:
+                text = self.scribe_text().strip()
+                incomplete = eot_incomplete(text)[0] or text.endswith("..")     # «كـ..» = a word cut off
+            except Exception:
+                incomplete = False
+            if incomplete:
+                return self.quiet_ms >= my_system.EOT_HOLD_MS
+        return ready
+
+
+SCRIBE_STOP = False     # set by --stop scribe: live Scribe's words can also trigger STOP (DEMO ONLY, not the scored system)
 
 OTHER_SYSTEM = None     # set by --system: a MySystem class from another file that makes the decisions instead of ours
 OTHER_NAME = ""
@@ -845,6 +878,54 @@ async def handler(ws):
             if held == "turn" and not decider.agent_talking:  # the caller finished a turn while we were busy and
                 asyncio.create_task(agent_speaks())         # the agent is not speaking over it: answer it now
 
+    # --- "Scribe stop" mode (demo only): live Scribe reads the caller's words while the agent talks, far more accurately
+    # than Whisper on a hard voice, and the same rules (turn_rules.decide, with the same loudness gates) judge them.
+    # Whisper keeps running in parallel: the first of the two to say STOP wins. Needs headphones (or good echo
+    # cancellation): Scribe is not muted while the agent talks.
+    ss = {"mark": None, "peak": -99.0, "last": "", "t0": 0.0}
+
+    def scribe_log(text, stop, why, peak, ref):
+        ms = (time.perf_counter() - ss["t0"]) * 1000
+        rel = f"{peak - ref:+.0f}" if ref is not None else "n/a"
+        system._log(f"[asr] burst {system._burst_id} {ms / 1000:.1f}s ({ms:.0f} ms, Scribe live, pk {peak:.0f} dB, "
+                    f"vs caller {rel} dB): {text!r} -> {'STOP' if stop else 'keep'} (Scribe: {why})")
+
+    def scribe_judge(text, peak):
+        ref = system._burst_ref
+        stop, why = decide(text, " ".join(system.agent_hist), peak, ref)
+        scribe_log(text, stop, why, peak, ref)
+        if stop and system.agent_talking and not system.stopped:
+            system._stop_flag = True                    # the next frame returns STOP, as for Whisper's own decision
+        return stop
+
+    async def scribe_burst_over(mark, peak):
+        """The burst ended and nothing stopped the agent: final text from Scribe, one last look, then forget the words
+        (a kept «أيوه» must not become the start of the caller's next turn)."""
+        await live.commit(timeout=1.0)
+        if system.stopped or not system.agent_talking:
+            return
+        text = " ".join(live.turn[mark:]).strip()
+        if text and ss["mark"] is None and scribe_judge(text, peak):
+            return
+        if ss["mark"] is None:
+            del live.turn[mark:]
+            live.partial = ""
+
+    def scribe_stop_step(caller):
+        talking = system.agent_talking and not system.stopped
+        if talking and system._in_burst:
+            if ss["mark"] is None:
+                ss.update(mark=len(live.turn), peak=-99.0, last="", t0=time.perf_counter())
+            ss["peak"] = max(ss["peak"], float(loudness_db(caller)))
+            text = " ".join(live.turn[ss["mark"]:] + ([live.partial] if live.partial else [])).strip()
+            if text and text != ss["last"]:
+                ss["last"] = text
+                scribe_judge(text, ss["peak"])
+        elif ss["mark"] is not None:
+            mark, peak, ss["mark"] = ss["mark"], ss["peak"], None
+            if system.agent_talking and not system.stopped and not system._stop_flag:
+                asyncio.create_task(scribe_burst_over(mark, peak))
+
     async def sender():
         while True:
             item = await queue.get()
@@ -865,7 +946,11 @@ async def handler(ws):
                     # the burst; «دقيقة معلش، خلّي يوم الثلاثاء» was over before the STOP and was lost, Nov 19)
                     stopped_now = getattr(decider, "stopped", False)
                     burst = (system._n - system._burst_start) // 320 if (system._in_burst or stopped_now) else 0
-                    live.feed(caller, hold, burst)
+                    if SCRIBE_STOP and decider is system:
+                        live.feed(caller)               # never muted: its words can stop the agent
+                        scribe_stop_step(caller)
+                    else:
+                        live.feed(caller, hold, burst)
                 if len(recording) < 50 * 600:           # at most 10 minutes per call
                     recording.append(caller.copy())
                 if decider is not system:
@@ -899,6 +984,7 @@ async def handler(ws):
             t = msg.get("type")
             if t == "call_end":
                 save_recording()
+                system.scribe_text = None
                 if live is not None:                    # stop streaming (and paying) when the call ends
                     await live.close()
                     live = None
@@ -913,6 +999,7 @@ async def handler(ws):
                 push({"type": "info", "text": f"call started: {msg.get('use_case', '')}"})
             elif t == "chat_start":                     # free call: the agent opens with an LLM line
                 save_recording()
+                system.scribe_text = None
                 chat = Conversation(msg.get("scenario", ""), msg.get("voice", "shimmer"), msg.get("stt", "local"),
                                     msg.get("writer", "haiku"))
                 if live is not None:
@@ -924,9 +1011,16 @@ async def handler(ws):
                     if err:
                         push({"type": "info", "text": err + " (using batch Scribe instead)"})
                         live, chat.stt = None, "scribe"
+                    else:
+                        lv = live                       # the end-of-turn check reads this call's live text
+                        system.scribe_text = lambda: " ".join(lv.turn + ([lv.partial] if lv.partial else []))
                 for s in both:
                     s.on_scenario_start({"use_case": "free call", "language": "ar"})
                 push({"type": "info", "text": "free call started: " + chat.scenario})
+                if SCRIBE_STOP:
+                    push({"type": "info", "text": "SCRIBE STOP MODE (demo only): live Scribe's words can also stop the agent; "
+                          "the scored system decides with Whisper alone" if live is not None else
+                          "Scribe stop mode needs 'Your words: live' (it is off for this call)"})
                 asyncio.create_task(agent_speaks("ألو؟"))       # the customer picks up
             elif t == "chat_silence" and chat is not None:   # the page's timer: no answer since the agent's line
                 # only if the caller really stayed silent: the timer counts from the agent's last word and cannot know
@@ -934,6 +1028,7 @@ async def handler(ws):
                 if not system.caller_spoke and not system._in_burst:
                     asyncio.create_task(agent_speaks("…"))     # silence: the agent checks in
             elif t == "agent_start":
+                ss["mark"] = None
                 for s in both:
                     s.on_agent_start(msg.get("text", ""), int(msg.get("duration_ms", 0)))
             elif t == "agent_end":
@@ -964,12 +1059,17 @@ async def main(port):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8780)
+    ap.add_argument("--stop", choices=["whisper", "scribe"], default="whisper",
+                    help="scribe = demo only: live Scribe's words can also stop the agent (use headphones)")
     ap.add_argument("--system", default="", help="another system file decides instead of ours; 'v1' = my_system_v1.py")
     a = ap.parse_args()
     if a.system:
         path = HERE / ("my_system_v1.py" if a.system == "v1" else a.system)
         OTHER_SYSTEM, OTHER_NAME = load_other_system(path), path.name
         print(f"[demo] decisions come from {path.name}; our system only shows what Whisper hears", flush=True)
+    SCRIBE_STOP = a.stop == "scribe"
+    if SCRIBE_STOP:
+        print("[demo] SCRIBE STOP MODE: live Scribe can also stop the agent (demo only; use headphones)", flush=True)
     my_system.LOG_FILE = "demo_log.txt"                 # keep the benchmark's asr_log.txt clean
     ASR.load()
     asyncio.run(main(a.port))
