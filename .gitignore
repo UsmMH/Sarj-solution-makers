@@ -12,6 +12,7 @@ eval_rules_out.txt
 # secrets
 .env
 data/aug/
+data/soak/
 demo_recordings/
 demo_log.txt
 demo/voice_samples/
