@@ -71,6 +71,28 @@ EOT_WINDOW_MS = 4000                        # ...the last 4 s of their audio (on
 EOT_WAIT_RESULT_MS = 900                    # no answer from the ASR by then -> take the turn anyway
 EOT_HOLD_MS = 1600                          # text ends mid-thought: wait this long (total quiet) before taking the turn
 
+# --- robustness (no effect on decisions while Whisper works) --------------------------------------------------------------
+ASR_MAX_FAILS = 3                           # this many failed decodes in a row -> temporary energy-rule fallback
+RETRY_S = 10.0                              # while in fallback: try to bring Whisper back this often (reload the model if needed)
+WATCHDOG_FRAMES = 50                        # every 1 s the 20 ms loop checks that the worker thread is still alive
+
+
+def log_line(line):
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def loud_warning(title, details):
+    """A multi-line banner on the console AND in asr_log.txt: nobody should score a run on the fallback by accident."""
+    bar = "!" * 78
+    lines = [bar, f"!!  WHISPER {title}", "!!"] + [f"!!  {d}" for d in details] + [bar]
+    for ln in lines:
+        print(ln, flush=True)
+        log_line(ln)
+
 
 def add_cuda_dlls():
     """Make the pip-installed CUDA 12 libraries (nvidia-cublas-cu12, nvidia-cudnn-cu12) findable on Windows."""
@@ -99,6 +121,30 @@ class Asr:
     def __init__(self):
         self.model = None
         self.ok = False
+        self._retry_lock = threading.Lock()
+        self._last_try = 0.0                                     # time.monotonic() of the last (re)load attempt
+
+    def _load_model(self):
+        from faster_whisper import WhisperModel
+        self.model = WhisperModel(ASR_MODEL, device="cuda", compute_type=ASR_COMPUTE)
+        self.transcribe(np.zeros(SR, dtype=np.float32))[0]       # warm-up: a missing CUDA library shows up here, not mid-call
+
+    def _diagnose(self):
+        """What is missing? (faster-whisper, CUDA device) -> list of plain sentences for the warning."""
+        found = []
+        try:
+            import faster_whisper  # noqa: F401
+        except Exception as ex:
+            found.append(f"faster-whisper cannot be imported: {ex!r}   (pip install faster-whisper)")
+            return found
+        try:
+            import ctranslate2
+            n = ctranslate2.get_cuda_device_count()
+            if n < 1:
+                found.append("CUDA: no GPU visible to ctranslate2 (driver / cuBLAS / cuDNN: nvidia-cublas-cu12, nvidia-cudnn-cu12)")
+        except Exception as ex:
+            found.append(f"CUDA check failed: {ex!r}")
+        return found
 
     def load(self):
         if not ASR_ON:
@@ -106,15 +152,46 @@ class Asr:
             return
         add_cuda_dlls()
         try:
-            from faster_whisper import WhisperModel
             t0 = time.perf_counter()
-            self.model = WhisperModel(ASR_MODEL, device="cuda", compute_type=ASR_COMPUTE)
-            self.transcribe(np.zeros(SR, dtype=np.float32))[0]     # warm-up: a missing CUDA library shows up here, not mid-call
+            self._load_model()
             self.ok = True
             print(f"[asr] {ASR_MODEL} on cuda/{ASR_COMPUTE} ready in {time.perf_counter() - t0:.1f}s", flush=True)
         except Exception as ex:                                  # no CPU fallback: ~3 s per decode is useless here
             self.ok = False
+            self.model = None
             print(f"[asr] NOT available ({ex!r}): energy rule only", flush=True)
+            loud_warning("IS NOT AVAILABLE: running on the loudness-only fallback (scores will drop)",
+                         [f"model {ASR_MODEL!r} on cuda/{ASR_COMPUTE}: {ex!r}"] + self._diagnose() +
+                         [f"The server keeps running and retries Whisper every {RETRY_S:.0f} s in the background.",
+                          "Is the venv active ((.venv) in the prompt)? Is another process holding the GPU?"])
+        self._last_try = time.monotonic()
+
+    def try_recover(self):
+        """Bring Whisper back (reload the model if needed). Never blocks a caller that is not the one retrying, and makes
+        at most one attempt per RETRY_S. -> True only when an attempt just succeeded."""
+        if not ASR_ON or not self._retry_lock.acquire(blocking=False):
+            return False
+        try:
+            if time.monotonic() - self._last_try < RETRY_S:
+                return False
+            self._last_try = time.monotonic()
+            try:
+                if self.model is None:
+                    add_cuda_dlls()
+                    self._load_model()
+                else:
+                    self.transcribe(np.zeros(SR, dtype=np.float32))
+                self.ok = True
+                return True
+            except Exception as ex:
+                self.ok = False
+                self.model = None                                # next attempt reloads the model from scratch
+                line = f"[asr] retry failed ({ex!r}); next attempt in {RETRY_S:.0f} s"
+                print(line, flush=True)
+                log_line(line)
+                return False
+        finally:
+            self._retry_lock.release()
 
     def transcribe(self, audio: np.ndarray, max_new_tokens: int = 24):
         """-> (text, mean avg_logprob of the segments): Whisper's own confidence, logged to study garbled decodes."""
@@ -165,8 +242,20 @@ class MySystem(System):
         self._last_req_end = 0
         self._stop_flag = False
         self._fails = 0
-        if ASR.ok:
-            threading.Thread(target=self._worker, daemon=True).start()
+        self._fallback_said = False
+        self._frames = 0
+        self._thread = None
+        if ASR_ON:                                               # also when Whisper is down now: the worker retries it
+            self._start_worker()
+
+    @property
+    def _asr_live(self):
+        """Whisper is usable right now. Anything else = the temporary energy-rule fallback."""
+        return ASR.ok and self._fails < ASR_MAX_FAILS
+
+    def _start_worker(self):
+        self._thread = threading.Thread(target=self._worker, daemon=True)
+        self._thread.start()
 
     # --- what is happening in the call -------------------------------------------------------------------
     def on_scenario_start(self, context=None):
@@ -200,11 +289,14 @@ class MySystem(System):
         loud_stop = db > max(LOUD_DB, floor + MARGIN_DB)      # adaptive: "a burst of sound exists"
         loud_eot = loud_stop     # end of turn uses the same adaptive floor: at a fixed -42 dB, room noise in a noisy
                                  # place counted as "the caller spoke" and the agent took turns nobody gave it (Nov 18)
+        self._frames += 1
+        if self._frames % WATCHDOG_FRAMES == 0:
+            self._ensure_worker()
 
         if self.agent_talking:
             if self.stopped:
                 return None
-            if ASR.ok and self._fails < 3:
+            if self._asr_live:
                 self._track_burst(loud_stop)
                 if not self._in_burst:                         # a burst never sets its own reference
                     self._update_ref(db, loud_stop)
@@ -214,7 +306,7 @@ class MySystem(System):
                 return None
             return self._energy_stop(loud_stop, db)           # ASR missing or failing: step-2a behaviour
 
-        smart = EOT_SMART and ASR.ok and self._fails < 3
+        smart = EOT_SMART and self._asr_live
         self._update_ref(db, loud_stop)                        # the agent is quiet: this is the caller's own turn
         if loud_eot:
             self.caller_spoke, self.quiet_ms = True, 0
@@ -355,52 +447,93 @@ class MySystem(System):
         except Exception:
             pass
 
-    def _worker(self):
-        silence = np.zeros(SR, dtype=np.float32)
-        while True:
-            woke = self._wake.wait(timeout=WARM_EVERY_S if WARM else None)
-            if not woke:                                       # WARM experiment: nothing to do, keep the GPU awake
-                if not self._in_burst and (self.agent_talking or (self.caller_spoke and EOT_SMART)):
-                    try:
-                        ASR.transcribe(silence)
-                    except Exception:
-                        pass
-                continue
-            with self._lock:
-                req, self._req = self._req, None
-                ereq, self._eot_req = self._eot_req, None
-                self._wake.clear()
-            if ereq is not None:
-                self._do_eot(ereq)
-            if req is None:
-                continue
-            epoch, burst_id, start, end, agent_text, ref = req
-            audio = self._snapshot(start, end)
-            if audio is None:
-                continue
-            try:
-                t0 = time.perf_counter()
-                text, logprob = ASR.transcribe(audio)
-                ms = (time.perf_counter() - t0) * 1000
-                self._fails = 0
-            except Exception as ex:
-                self._fails += 1
-                print(f"[asr] decode failed ({ex!r}); {self._fails} in a row", flush=True)
-                continue
-            body = audio[min(PAD_MS * SR // 1000, max(0, len(audio) - FRAME_SAMPLES)):]   # loudness: the burst only, not the lead-in
-            fr = body[: len(body) // FRAME_SAMPLES * FRAME_SAMPLES].reshape(-1, FRAME_SAMPLES)
-            pk = 20 * np.log10(np.sqrt((fr.astype(np.float64) ** 2).mean(axis=1)).max() + 1e-12) if len(fr) else -99.0
-            stop, why = decide(text, agent_text, peak_db=float(pk), ref_db=ref)
-            rel = f"{pk - ref:+.0f}" if ref is not None else "n/a"
-            line = (f"[asr] burst {burst_id} {len(audio) / SR:.1f}s ({ms:.0f} ms, lp {logprob:.2f}, pk {pk:.0f} dB, "
-                    f"vs caller {rel} dB): {text!r} -> "
-                    f"{'STOP' if stop else 'keep'} ({why})")
+    def _ensure_worker(self):
+        """Called from the 20 ms loop once a second: a worker thread that died is replaced (cheap, never blocks)."""
+        if ASR_ON and (self._thread is None or not self._thread.is_alive()):
+            line = "[asr] worker thread was dead: restarting it"
             print(line, flush=True)
             self._log(line)
-            if stop:
-                with self._lock:
-                    if epoch == self._epoch and self.agent_talking and not self.stopped:
-                        self._stop_flag = True
+            self._start_worker()
+
+    def _worker(self):
+        """Supervisor: whatever happens inside, the thread keeps going (and _ensure_worker() covers a thread that dies)."""
+        silence = np.zeros(SR, dtype=np.float32)
+        while True:
+            try:
+                self._worker_step(silence)
+            except Exception as ex:
+                line = f"[asr] worker error ({ex!r}): carrying on"
+                print(line, flush=True)
+                self._log(line)
+                time.sleep(0.05)                               # never spin on a persistent error
+
+    def _fallback_step(self):
+        """Whisper is down: the 20 ms loop is on the energy rule. Retry in the background; switch back when it works."""
+        if not self._fallback_said:
+            self._fallback_said = True
+            ASR._last_try = max(ASR._last_try, time.monotonic())   # first retry in RETRY_S, not instantly
+            loud_warning("FAILED: temporary fallback to the loudness-only rule",
+                         [f"{self._fails} failed decodes in a row" if ASR.ok else "model not loaded",
+                          f"Retrying Whisper in the background every {RETRY_S:.0f} s; it switches back on its own."])
+        with self._lock:                                       # requests from before the failure are stale
+            self._req, self._eot_req = None, None
+            self._wake.clear()
+        time.sleep(0.5)
+        if ASR.try_recover():
+            self._fails = 0
+            self._reset_burst()                                # drop half-tracked bursts from before the outage
+            self._fallback_said = False
+            line = "[asr] Whisper is back: leaving the loudness-only fallback"
+            print(line, flush=True)
+            self._log(line)
+
+    def _worker_step(self, silence):
+        if not self._asr_live:
+            self._fallback_step()
+            return
+        woke = self._wake.wait(timeout=WARM_EVERY_S if WARM else None)
+        if not woke:                                           # WARM experiment: nothing to do, keep the GPU awake
+            if not self._in_burst and (self.agent_talking or (self.caller_spoke and EOT_SMART)):
+                try:
+                    ASR.transcribe(silence)
+                except Exception:
+                    pass
+            return
+        with self._lock:
+            req, self._req = self._req, None
+            ereq, self._eot_req = self._eot_req, None
+            self._wake.clear()
+        if ereq is not None:
+            self._do_eot(ereq)
+        if req is None:
+            return
+        epoch, burst_id, start, end, agent_text, ref = req
+        audio = self._snapshot(start, end)
+        if audio is None:
+            return
+        try:
+            t0 = time.perf_counter()
+            text, logprob = ASR.transcribe(audio)
+            ms = (time.perf_counter() - t0) * 1000
+            self._fails = 0
+        except Exception as ex:
+            self._fails += 1
+            print(f"[asr] decode failed ({ex!r}); {self._fails} in a row", flush=True)
+            return
+        body = audio[min(PAD_MS * SR // 1000, max(0, len(audio) - FRAME_SAMPLES)):]   # loudness: the burst only, not the lead-in
+        fr = body[: len(body) // FRAME_SAMPLES * FRAME_SAMPLES].reshape(-1, FRAME_SAMPLES)
+        pk = 20 * np.log10(np.sqrt((fr.astype(np.float64) ** 2).mean(axis=1)).max() + 1e-12) if len(fr) else -99.0
+        stop, why = decide(text, agent_text, peak_db=float(pk), ref_db=ref)
+        rel = f"{pk - ref:+.0f}" if ref is not None else "n/a"
+        line = (f"[asr] burst {burst_id} {len(audio) / SR:.1f}s ({ms:.0f} ms, lp {logprob:.2f}, pk {pk:.0f} dB, "
+                f"vs caller {rel} dB): {text!r} -> "
+                f"{'STOP' if stop else 'keep'} ({why})")
+        print(line, flush=True)
+        self._log(line)
+        if stop:
+            with self._lock:
+                if epoch == self._epoch and self.agent_talking and not self.stopped:
+                    self._stop_flag = True
 
 
 if __name__ == "__main__":
