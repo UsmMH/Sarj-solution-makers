@@ -902,12 +902,20 @@ async def handler(ws):
         """The burst ended and nothing stopped the agent: final text from Scribe, one last look, then forget the words
         (a kept «أيوه» must not become the start of the caller's next turn)."""
         await live.commit(timeout=1.0)
-        if system.stopped or not system.agent_talking:
+        if system.stopped:
+            return
+        if not system.agent_talking:
+            # the agent finished while the caller was still talking or just after (an answer to its last words, «إيه
+            # أكيد» to «ممكن تنتظر؟»): it is the caller's turn, keep the words and let TAKE_TURN follow their silence
+            if " ".join(live.turn[mark:]).strip():
+                system.caller_spoke, system.quiet_ms = True, 0
             return
         text = " ".join(live.turn[mark:]).strip()
         if text and ss["mark"] is None and scribe_judge(text, peak):
             return
         if ss["mark"] is None:
+            if text:
+                ss["kept"] = (text, time.perf_counter())    # if the agent ends within 1.5 s, this was its answer
             del live.turn[mark:]
             live.partial = ""
 
@@ -1029,12 +1037,19 @@ async def handler(ws):
                     asyncio.create_task(agent_speaks("…"))     # silence: the agent checks in
             elif t == "agent_start":
                 ss["mark"] = None
+                ss.pop("kept", None)
                 for s in both:
                     s.on_agent_start(msg.get("text", ""), int(msg.get("duration_ms", 0)))
             elif t == "agent_end":
                 stopped = getattr(decider, "stopped", False)
                 for s in both:
                     s.on_agent_end()
+                kept = ss.pop("kept", None)
+                if SCRIBE_STOP and live is not None and not stopped and kept and time.perf_counter() - kept[1] < 1.5:
+                    live.turn[:] = [kept[0]]            # said over the agent's last words: that is the caller's answer
+                    system.caller_spoke = True
+                    system.quiet_ms = int((time.perf_counter() - kept[1]) * 1000)
+                    push({"type": "info", "text": f"you answered over the agent's last words: «{kept[0]}» counts as your turn"})
                 if live is not None and chat is not None and chat.agent_text:
                     live.agent_said(chat.agent_text)    # its echo will be removed from the caller's next turn
                 if chat is not None:
