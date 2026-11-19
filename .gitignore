@@ -13,6 +13,8 @@ eval_rules_out.txt
 .env
 data/aug/
 data/soak/
+data/t4_bench/
+data/polite/
 demo_recordings/
 demo_log.txt
 demo/voice_samples/

@@ -99,7 +99,61 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
   another system file decide (mentor's `my_system_v1.py`, untracked, kept out of git).
 - Mentors' suggestion to move work to cloud sessions: declined (all testing needs this laptop's GPU, mic and local data).
 
-## Status and plan (afternoon of Nov 19) — START HERE in a new session
+## STATUS NIGHT OF NOV 19-20 (Day 5) — START HERE (supersedes the sections below where they disagree)
+- **Dates (Sarj, Nov 19 evening): code freeze FRIDAY Nov 20, 8:00 PM (commit hash + service list); report + presentation
+  SATURDAY Nov 21, 12:00; final run Saturday.** The older "freeze Saturday 12:00" below is out of date.
+- **Focus: only the scored harness stream (80 % Core). The free-conversation demo is frozen: do not work on it.** Keep the
+  recorded-call demo working. No overfitting: no per-call fixes; every change must hold on dev, vol-12, loudstart+8, team data
+  (`data/v3_bench`) and the polite set (`data/polite`) before it goes into `my_system.py` / `turn_rules.py`.
+- **Practice checkpoint (Nov 19, 16 unseen calls; file `sarj-challenge_checkpoint.md`): we are "Pearl", 5th, Core 77.0.**
+  Stops when it should 0.63 (5 of 7 interruptions; the misses were one overlap call and one dialect call), keeps talking 0.92
+  (2 false stops, both in ONE background-speech call: TV-like talk at the caller's level), median stop 0 ms, p90 1291 ms.
+  Top of the board: 91.9 (R 0.87, S 0.96) and 90.1 (R 0.97, S 0.91). Lesson: our weakness is catching interruptions, not
+  restraint; latency is not the problem (0.3 s target dropped).
+- **What the checkpoint decode log showed** (`asr_log.txt` held only those 16 calls then): 8 of 39 bursts were entirely Whisper
+  stock phrases («ترجمة نانسي قنقر», «اشتركوا في القناة»), some loud and 0.9-1.5 s long: probable missed stops.
+- **Tested and DROPPED (data in this session):** not counting grammar particles in the 3-word rule (loses 41 of 127 logged real
+  stops); a speaker-embedding veto against background voices (`speaker_gate.py`, WeSpeaker ResNet34-LM in `models/`): callers
+  have only ~1 s of clean speech before the first interruption, so same-speaker (0.04-0.49) overlaps background (0.05-0.10);
+  longer Whisper lead-in (0.8/1.2 s) for stock phrases (helps the first 300 ms only: 30 % -> 19 %, nothing at 600 ms);
+  voicing (pitch) as a speech-vs-noise cue (backchannels 0.96, TV 0.74, human speech 0.74: no separation); «يا جماعة» as side
+  talk (customers say it to a company too).
+- **Being evaluated now: `my_system_next.py` + `turn_rules_next.py` (copies; the frozen files are untouched):**
+  1. Second opinion: when the main model returns a stock phrase on a burst, the dialect model
+     (`models/turbo-ar-dialectal-v2-ct2`) re-reads it. On 120 real-voice bursts the main model gave a stock phrase 29 % / 9 % / 4 %
+     of the time for the first 300 / 600 / 1000 ms; the dialect model 0 %. Switch off: `$env:ASR2_MODEL="off"`.
+  2. Polite «لا» (mentor's example «لا لا إن شاء الله» is KEEP): continuation phrases cancel the «لا» cue (`POLITE_PHRASES`),
+     and a bare «لا»/«لا لا» stop waits for the next decode while the caller is still talking (`BARE_LA_WAIT=off` disables).
+  - Test sets: `data/polite` (made by `make_polite.py`, 7 calls, 9 events, ElevenLabs clips, labels NOT listener-validated).
+  - Queue: dev, polite, vol-12, loudstart+8, v3_bench, real time (~1 h). Targets to match: dev 95.0, vol-12 93.5,
+    loudstart 89.7, v3_bench 71.0. Track it: `python progress_next.py`.
+  - Adopt only if nothing gets worse; then copy the `_next` changes into `my_system.py` / `turn_rules.py`, re-run
+    `python -m ttbench.ready`, commit with a CLEAN tree, hand in the hash. Ablate each change (ASR2_MODEL=off, BARE_LA_WAIT=off).
+- **RESULTS OF THE CANDIDATES (Nov 20, 00:20): nothing beat the frozen system on held-out data, so the plan is to FREEZE the
+  current scored files (commit d12ca5b = my_system.py / turn_rules.py unchanged).** Frozen vs candidates, Core (R, S):
+  dev 95.0 | next 94.1 | quiet 93.5 | 93.2 | loud-start 89.7 | 90.9 | team data 71.0 (0.53, 1.00) | next 66.4 (hold hurt: stops
+  0.3-0.6 s late) | v2 70.7 (0.53, 1.00) | NEW 38 team-v4 calls (held out) frozen 54.1 (0.39, 0.87) | v2 52.9 (0.38, 0.87) |
+  polite set next 82.7 | v2 79.3 (the polite veto alone cannot work: the first decode hears «لا لا» before «إن شاء الله»).
+  v2 = `my_system_v2.py` + `turn_rules_v2.py` (repeated-word cue, polite veto, dialect second opinion, no hold).
+- **Inspection (56 genuine STOP events of dev + team + team-v4, `inspect_misses.py`):** 45 % stop within 1 s; 41 % later than 1 s
+  (mostly first-decode timing; the team sets count latency from the first syllable, so they look worse than the real scorer);
+  9 % never stop = ambiguous words «طيب»/«خلاص»/«نعم؟» (text cannot decide; the real scorer treats ambiguous words as "either");
+  5 % never stop = Whisper mis-read a repeated «استنى». False stops on keep events are background speech at the caller's level
+  (checkpoint BG call, T4-BG01/02, dev BG-D01): no text rule separates it; loudness cannot (the TV is as loud as the caller).
+- **Also tested and rejected (all offline, numbers in the session):** ElevenLabs live as the engine (first text 0.75 s, none
+  before 0.7 s; same recall as Whisper, slower); acoustic "reflex" from pitch/voicing/spectral features (AUC 0.54, chance);
+  speaker veto (enrolment too short); 2-word / 4-word rules; lone question words (Whisper invents «شنو؟» on noise: 6 keep events
+  vs 1 stop); "stock phrase on a sustained burst = STOP" (0 of 56 stops, 10-12 keep events have it); lead-in 0.8/1.2 s.
+- **Still open, low priority:** RESUME (half credit for a stop taken back within 500 ms); robustness: Whisper never retried
+  after 3 failed decodes; a loud warning when Whisper is missing.
+- **New team data (teammates are generating it): never tune on it.** Convert it, run it once per candidate change as a held-out
+  check, keep one block untouched until the final report.
+- **Ops:** start the server with the venv ACTIVE (`(.venv)` in the prompt), otherwise Whisper is missing and the system silently
+  falls back to the energy rule (86.1 on dev instead of 95.0; that happened once). Check for `[asr] ... ready` and, with the
+  new file, `[asr] second opinion (dialect model) ready`. No `demo.py` or other GPU job during a scored run.
+- Known robustness gap: after 3 failed decodes the system never retries Whisper (stays on the energy rule). Fix before the final.
+
+## Status and plan (afternoon of Nov 19) — OLDER, superseded by the section above where they disagree
 - Everything is committed (b09ad9b). Untracked on purpose: `my_system_v1.py` (mentor's), `eot_v2_candidate/`.
 - Scored system unchanged since Nov 18: dev 95.0, vol-12 93.5, loudstart 89.7, team data 71.0, no false stops.
 - Docs current: WRITEUP.md (~2,600 words; failure case 8 = soft «يوم الثلوث» over a question), team plan doc with a
