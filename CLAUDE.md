@@ -1,7 +1,7 @@
 # CLAUDE.md — Team 4, Sarj Arabic Turn-Taking Hackathon
 
-Read this first. Hand-over from the chat sessions that built the system (Nov 15-18, 2026). Last update: evening of
-Nov 18 (Day 4). Code freeze and final submission: **Saturday Nov 21, 12:00** (moved from Nov 19).
+Read this first. Hand-over from the chat sessions that built the system (Nov 15-19, 2026). Last update: afternoon of
+Nov 19 (Day 5). Code freeze and final submission: **Saturday Nov 21, 12:00** (moved from Nov 19).
 
 ## Who and what
 - User: Usama, final-year Information Systems student at KSU, working with a small team (some non-technical). He wants to go **step by step**, and wants **full git commands** (`git add ...` + `git commit -m "..."`), never just a message. He runs on Windows / PowerShell, RTX 3060 Ti laptop.
@@ -99,6 +99,23 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
   another system file decide (mentor's `my_system_v1.py`, untracked, kept out of git).
 - Mentors' suggestion to move work to cloud sessions: declined (all testing needs this laptop's GPU, mic and local data).
 
+## Status and plan (afternoon of Nov 19) — START HERE in a new session
+- Everything is committed (b09ad9b). Untracked on purpose: `my_system_v1.py` (mentor's), `eot_v2_candidate/`.
+- Scored system unchanged since Nov 18: dev 95.0, vol-12 93.5, loudstart 89.7, team data 71.0, no false stops.
+- Docs current: WRITEUP.md (~2,600 words; failure case 8 = soft «يوم الثلوث» over a question), team plan doc with a
+  Nov 19 section + current-pipeline diagram.
+- OPEN QUESTION for the user: is the hidden scored stream on Day 6 (Nov 20) or at the Saturday submission? If Nov 20,
+  the system must be final tonight.
+- Next, in order (agreed list; the user picks):
+  1. Freeze dry run: `python -m ttbench.ready` (commit hash + service list), fix anything it flags.
+  2. «تقيقة» check: replay every logged decode (asr_log.txt + demo_log.txt) with ت accepted for د in near-spelling cues;
+     adopt only if 0 new false stops.
+  3. RESUME safety net (take back a wrong stop when the burst turns out to be only an ack/noise within 0.5 s): scored
+     change, needs real-time runs on clean + vol-12 + loudstart.
+  4. WRITEUP.md: teammates' names (section 9), trim to ~4 pages.
+  5. Demo rehearsal on the presenting laptop (plugged in, its own mic, venue network if possible).
+  6. Optional demo speed: synthesize the draft's first sentence early (~0.5 s faster replies).
+
 ## Known weak spots / next work (priority)
 1. **Late stops**: mostly fixed by the 400 ms lead-in (GI-D02/AM-D02 now ~0.5 s). Left: OV-D03 ~0.8 s (3-word rule: «يا أخي هذا» = 2 content words at 0.6 s), GI-D03 ~0.46 s. Idea: 2 words enough when the burst is as loud as the caller's voice. Check on clean + volume + stress sets, not by eye.
 2. RESUME: take back a wrong stop within 0.5 s (0.5 credit instead of 0) — insurance for the hidden set.
@@ -130,7 +147,7 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
   Theme button in the header: auto (Windows setting) / light / dark, remembered per browser.
 - Echo in live Scribe (Nov 19): on speakers the agent's lines (even short ones «هلا والله», «يناسبك؟») landed in the
   caller's bubbles. Now `ScribeLive.feed(frame, hold, burst_frames)` sends silence while the agent talks and the engine
-  has not stopped it; on STOP (or the agent ending mid-burst) the caller's burst is sent from its start (+100 ms).
+  has not stopped it; on STOP (or the agent ending mid-burst) the caller's burst is sent from its start.
   The clause filter stays as a second layer. Release = the STOP's burst even if it already ended (+400 ms before):
   Whisper's STOP often lands after the caller finished («دقيقة معلش، خلّي يوم الثلاثاء» was lost, then replayed
   word for word from `demo_recordings/call-002228.wav`).
@@ -143,7 +160,9 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
 
 ## Write-up (WRITEUP.md, due by the freeze) must declare
 - Final system: `mobiuslabsgmbh/faster-whisper-large-v3-turbo` via faster-whisper (local). No cloud call in the scored path.
-- Demo only: OpenRouter `openai/gpt-audio-mini` (voice + reply), `anthropic/claude-haiku-5.5` (fallback).
+- Demo only: ElevenLabs Scribe live/v1 (caller words), ElevenLabs TTS v4 Turbo / Flash v2.5 (voice), OpenRouter
+  `anthropic/claude-haiku-5.5` (writer), Gemini 2.5 Flash-Lite / Flash (options), `openai/gpt-audio-mini` (fallback voice).
+  WRITEUP.md section 8 already lists these (updated Nov 19).
 - Experiments: `Systran/faster-whisper-small` (early probes); OpenRouter Claude Haiku 5.5 / Llama 3.3 70B / GPT-4.1 mini (LLM judge); Gemini 2.5/3.7 Flash, Qwen 3.8 omni flash, GPT-audio-mini, Voxtral small (ASR comparison).
 - Failure cases with Arabic examples: «اصبر» missing cue (found live), quiet callers vs the old -20 dB gate, Whisper stock phrases, TV as reference, mic noise gate.
 
