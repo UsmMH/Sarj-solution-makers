@@ -43,7 +43,7 @@ from ttbench.dataset import read_wav_stereo
 # waits longer before taking the turn than the benchmark baseline (700 ms). The reply draft still starts at 300 ms of
 # silence and is ready after ~2 s anyway, so a later TAKE_TURN costs almost no reply time.
 my_system.TAKE_TURN_AFTER_MS = int(os.environ.get("DEMO_TURN_WAIT_MS", "1500"))    # text sounds finished (was 1200 on Nov 19)
-my_system.EOT_HOLD_MS = int(os.environ.get("DEMO_EOT_HOLD_MS", "3200"))            # text ends mid-thought: «يوم الـ..», «آآ،»
+my_system.EOT_HOLD_MS = int(os.environ.get("DEMO_EOT_HOLD_MS", "4000"))            # text ends mid-thought: «يوم الـ..», «آآ،»
 
 HERE = Path(__file__).parent
 DATA = HERE / "data" / "dev"
@@ -676,6 +676,10 @@ class DemoSystem(MySystem):
             try:
                 text = self.scribe_text().strip()
                 incomplete = eot_incomplete(text)[0] or text.endswith("..")     # «كـ..» = a word cut off
+                # Scribe closes a finished sentence with «.» «؟» «!»: three or more words that stop with no mark at all
+                # («هلا بكرة الصبح مو») were cut off, even without «..». One or two words («لا», «تمام») are not held.
+                if not incomplete and len(text.split()) >= 3 and text[-1] not in ".؟?!…":
+                    incomplete = True
             except Exception:
                 incomplete = False
             if incomplete:
@@ -947,12 +951,14 @@ async def handler(ws):
             system._stop_flag = True                    # the next frame returns STOP, as for Whisper's own decision
         return stop
 
-    async def scribe_burst_over(mark, peak):
+    async def scribe_burst_over(mark, peak, takes0):
         """The burst ended and nothing stopped the agent: final text from Scribe, one last look, then forget the words
         (a kept «أيوه» must not become the start of the caller's next turn)."""
         await live.commit(timeout=1.0)
         if system.stopped:
             return
+        if ss.get("takes", 0) != takes0:
+            return                  # a TAKE_TURN already answered this speech: do not take the same turn a second time
         if not system.agent_talking:
             # the agent finished while the caller was still talking or just after (an answer to its last words, «إيه
             # أكيد» to «ممكن تنتظر؟»): it is the caller's turn, keep the words and let TAKE_TURN follow their silence
@@ -972,7 +978,7 @@ async def handler(ws):
         talking = system.agent_talking and not system.stopped
         if talking and system._in_burst:
             if ss["mark"] is None:
-                ss.update(mark=len(live.turn), peak=-99.0, last="", t0=time.perf_counter())
+                ss.update(mark=len(live.turn), peak=-99.0, last="", t0=time.perf_counter(), takes0=ss.get("takes", 0))
             ss["peak"] = max(ss["peak"], float(loudness_db(caller)))
             text = " ".join(live.turn[ss["mark"]:] + ([live.partial] if live.partial else [])).strip()
             if text and text != ss["last"]:
@@ -981,7 +987,7 @@ async def handler(ws):
         elif ss["mark"] is not None:
             mark, peak, ss["mark"] = ss["mark"], ss["peak"], None
             if system.agent_talking and not system.stopped and not system._stop_flag:
-                asyncio.create_task(scribe_burst_over(mark, peak))
+                asyncio.create_task(scribe_burst_over(mark, peak, ss.get("takes0", 0)))
 
     async def sender():
         while True:
@@ -1017,6 +1023,7 @@ async def handler(ws):
                     d = d if isinstance(d, str) else d.get("decision")
                     push({"type": "decision", "decision": d})
                     if d == "TAKE_TURN" and chat is not None:
+                        ss["takes"] = ss.get("takes", 0) + 1
                         asyncio.create_task(agent_speaks())
                 if chat is not None and chat.voice in ELEVEN_VOICES and WRITER == "haiku":
                     dr = chat.draft
