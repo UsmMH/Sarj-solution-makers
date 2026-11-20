@@ -77,6 +77,10 @@ RETRY_S = 10.0                              # while in fallback: try to bring Wh
 SPEC_STOP = os.environ.get("SPEC_STOP", "on").lower() != "off"   # B: speculative STOP on 2 loud content words
 SPEC_REL_DB = -3.0                          # ...only when the burst is about as loud as the caller's own voice
 SPEC_RESUME_MS = 450                        # not confirmed by the next decode within this -> RESUME (0.5 credit, not 0)
+DEFAULT_STOP = os.environ.get("DEFAULT_STOP", "on").lower() != "off"  # Nov 21: sustained speech at the caller's level
+DS_MIN_MS = 1000                            # ...for 1 s (backchannels are short) with >= 1 non-backchannel word -> STOP
+DS_REL_DB = -3.0                            # ...as loud as the caller's own voice (same line as SPEC_REL_DB); pre-registered in
+                                            # analysis/PREREG_default_stop_nov20.md, sim check fold 90.1 -> 93.0, 0 events worse
 SLOW_MS = 600                               # median of the last SLOW_N burst decodes above this -> energy rule: in the sim,
 SLOW_N = 5                                  # Whisper at ~550 ms/decode already scores below the energy rule (dev 84.6 vs 86.1,
 FAST_MS = 400                               # val 33.7 vs 56.0); switch back once a probe decode takes less than FAST_MS
@@ -604,6 +608,12 @@ class MySystem(System):
             print(f"[asr] decode failed ({ex!r}); {self._fails} in a row", flush=True)
             return None
         stop, why = decide(text, agent_text, peak_db=float(pk), ref_db=ref)
+        burst_ms = (end - start) * 1000 // SR
+        if (DEFAULT_STOP and not stop and why == "acknowledgement or too little to tell" and ref is not None
+                and pk - ref >= DS_REL_DB and burst_ms >= DS_MIN_MS):
+            from turn_rules import tokens, NEUTRAL, is_ack
+            if any(t not in NEUTRAL and not is_ack(t) for t in tokens(text)):
+                stop, why = True, f"default stop: {burst_ms} ms of speech at the caller's level"
         spec = False
         if SPEC_STOP and not stop and ref is not None and pk - ref >= SPEC_REL_DB and why == "acknowledgement or too little to tell":
             from turn_rules import tokens, NEUTRAL, is_ack

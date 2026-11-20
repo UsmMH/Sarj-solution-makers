@@ -1,4 +1,5 @@
-"""TRIAL, not submitted: "default stop". The Whisper system (my_system.py) plus one rule:
+"""TRIAL harness for "default stop" (Nov 20). The adopted version (-3 dB, 1 word, 1 s) is now built into my_system.py
+(DEFAULT_STOP); run this file only with DEFAULT_STOP=off to reproduce the trial variants. Original idea, one rule:
 
     a caller who keeps talking for DS_MIN_MS at about their own loudness, with at least one word that is not a
     backchannel, is taking the floor -> STOP, even without a cue word, a question or 3 real words.
@@ -16,8 +17,11 @@ import my_system as M
 from my_system import *  # noqa: F401,F403  (ASR, TEAM, ... for sim.py and run())
 from turn_rules import NEUTRAL, is_ack, tokens
 
-DS_MIN_MS = 1000
-DS_REL_DB = -6.0
+import os  # noqa: E402
+
+DS_MIN_MS = int(os.environ.get("DS_MIN_MS", "1000"))
+DS_REL_DB = float(os.environ.get("DS_REL_DB", "-6.0"))
+DS_MIN_WORDS = int(os.environ.get("DS_MIN_WORDS", "1"))     # non-backchannel content words needed
 _now = {"burst_ms": 0}
 _decide = M.decide
 
@@ -26,7 +30,7 @@ def decide(text, agent_text="", peak_db=None, ref_db=None):
     stop, why = _decide(text, agent_text, peak_db=peak_db, ref_db=ref_db)
     if (not stop and why == "acknowledgement or too little to tell" and ref_db is not None and peak_db is not None
             and peak_db - ref_db >= DS_REL_DB and _now["burst_ms"] >= DS_MIN_MS
-            and any(t not in NEUTRAL and not is_ack(t) for t in tokens(text))):
+            and sum(1 for t in tokens(text) if t not in NEUTRAL and not is_ack(t)) >= DS_MIN_WORDS):
         return True, f"default stop: {_now['burst_ms']} ms of speech at the caller's level"
     return stop, why
 

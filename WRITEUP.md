@@ -10,8 +10,8 @@ GPU) re-reads that burst every ~300 ms, and Arabic rules decide: a floor bid («
 question, a real sentence) means STOP; a backchannel («إيه», «تمام»), an echo of the agent, side talk, TV or noise means
 keep talking. Loudness is judged *relative to this caller*, so a soft speaker is not mistaken for background noise.
 
-**Scored code** (`my_system.py`, `turn_rules.py`) last changed in commit `21472df` (Nov 20): speculative STOP + RESUME,
-dialect cues, slow-decode watchdog. The handed-in commit adds only documentation and test tools on top of it.
+**Scored code** (`my_system.py`, `turn_rules.py`): the Nov 20 changes (speculative STOP + RESUME, dialect cues,
+slow-decode watchdog) plus the Nov 21 "default stop" (section 5), each measured before it was adopted.
 
 ## 2. Why this approach
 
@@ -37,6 +37,7 @@ caller audio, 20 ms frames (agent TEXT used for echo detection)
  │     STOP:  cue word (لحظة، استنى، اسمع، بس، اصبر، «لا» at the start…) or one of 60 phrases
  │     STOP:  a question, or 3+ real words, unless more than 6 dB quieter than the caller's voice
  │     STOP?: 2 real words at the caller's own loudness = speculative STOP; RESUME if not confirmed within 450 ms
+ │     STOP:  "default stop": 1 s of speech as loud as the caller's own voice with any non-backchannel word
  └─ end of turn: caller quiet 300 ms → Whisper reads their last 4 s → unfinished? wait up to 1.6 s, else 0.7 s
 Fallback: Whisper fails 3 times, or decodes get slow (median > 600 ms): loudness-only rule, Whisper retried in background.
 ```
@@ -48,7 +49,7 @@ judged, reset per call. A live browser demo (`demo.py`) runs the same system on 
 
 | | |
 |---|---|
-| Stop latency, dev (real time) | median 426 ms after the intent was evident, p90 507 ms |
+| Stop latency, dev (real time) | median 476 ms after the intent was evident, p90 525 ms |
 | Where the time goes | 300 ms of burst before the first decode + ~280 ms decode + up to 100 ms for the next slot |
 | Hardware | RTX 3060 Laptop GPU (6 GB), ~2.4 GB used, mains power (battery: decodes ~35 % slower); ~809 M parameters |
 | Cloud calls and cost | none in the scored system |
@@ -57,7 +58,7 @@ judged, reset per call. A live browser demo (`demo.py`) runs the same system on 
 
 | Set (live, real time) | Core | R | S |
 |---|---|---|---|
-| Dev, 24 calls | 95.7 | 0.95 | 1.00 |
+| Dev, 24 calls | 97.3 | 0.94 | 1.00 |
 | Organisers' checkpoint, 16 new calls (earlier code, Nov 19) | 77.0 | 0.63 | 0.92 |
 | Team data, locked test split, 11 calls, run once | 74.7 (was 72.2) | 0.60 | 1.00 |
 | Team data, train 44 / validation 11 calls | 64.2 / 65.0 | 0.49 / 0.45 | 0.92 / 1.00 |
@@ -76,11 +77,12 @@ telephone band 300–3400 Hz + G.711, pink noise at 15 dB SNR, car-like brown no
 
 | Check fold, 16 calls (Core) | dev | −12 dB | loud start | click | phone | pink | brown | echo | **mean** |
 |---|---|---|---|---|---|---|---|---|---|
-| Whisper (submitted) | 92.9 | 91.1 | 89.6 | 92.9 | 89.0 | 88.4 | 93.5 | 81.3 | **89.8** |
+| Whisper, Nov 20 rules (live) | 92.9 | 91.1 | 89.6 | 92.9 | 89.0 | 88.4 | 93.5 | 81.3 | **89.8** |
+| **Whisper + default stop (submitted)**, simulated | 96.8 | 94.4 | 89.9 | 96.8 | 91.5 | 92.5 | 94.4 | 87.2 | **93.0** |
 | ElevenLabs live (experiment) | 88.9 | 89.8 | 89.3 | 89.1 | 88.4 | 85.3 | 87.6 | 90.2 | **88.6** |
 
 No interruption was missed on the check fold in any copy; one false stop each on the phone copy. Room echo is the
-submitted system's weakest condition (stops slow to p90 1.3 s); on the inspect fold, phone and noise copies each cost
+Nov 20 system's weakest condition (stops slow to p90 1.3 s); on the inspect fold, phone and noise copies each cost
 one interruption. The ElevenLabs version (`my_system_eleven.py`, same rules) is not submitted: cloud-dependent, slower on
 clean audio, and 1.2 points lower on average (within the ±2 spread).
 
@@ -93,12 +95,22 @@ on a real interruption, ~300 ms earlier, never needed a RESUME; (C) dialect cues
 «مو/مب/مش» at the start, Hijazi and Kuwaiti question words), checked against 2,533 logged decodes: 2 real stops gained,
 0 new false stops; (F) slow-decode watchdog: at 3× decode time dev would fall to 27.6, with the switch 85.4.
 
+**Nov 21 change, kept: "default stop".** The top checkpoint teams had our Restraint but far higher Responsiveness (R
+0.87-0.97 vs 0.63), so we tried stopping on sustained speech unless the words prove it is a backchannel. A first version
+(1 word, 1 s, −6 dB) tied (90.1 vs 90.1) with a new false stop. We then wrote down exactly two variants and the acceptance
+rule before running them (`analysis/PREREG_default_stop_nov20.md`): ≥ 2 words failed (brown noise −5.7, a false stop);
+**≥ 1 non-backchannel word over 1 s at ≥ −3 dB vs the caller's own voice** (the line the speculative STOP already uses)
+passed: check-fold mean 90.1 → 93.0 in the deterministic replay, no set lower, no new false stop, and not one event
+scored lower on any of the 8 sets. Live real-time confirmation (check fold): dev 92.9 → 96.2, click 92.9 → 95.5, room echo
+81.3 → 85.2, 0 false stops. It catches the ambiguous «خلاص خلاص… فهمت», the overlap «إيه الأحد … زين، احجزه» in noise, and
+an echoey interruption earlier. Honest size: 4 different calls improved, none harmed; we expect +1 to +3 on new calls.
+
 ## 5b. Tried and rejected
 
 | Idea | Result |
 |---|---|
 | Hedged STOP at 200-300 ms on any loud sound, RESUME if it is an acknowledgement | S fell to 0.73-0.80: every loud KEEP burst became a half-credit hiccup |
-| "Default stop", as the top checkpoint teams' R suggests: 1 s of speech at the caller's own loudness with one non-backchannel word = STOP (`my_system_ds.py`, simulated) | Check-fold mean 90.1 vs 90.1: catches the overlap in noise (OV-D01 0 → 0.84), echo +4.6, pink noise +3.5, but a new false stop (OV-D02) on 4 of 8 copies; brown noise −4.6. Rejected by our pre-set rule |
+| "Default stop" at −6 dB (1 word) or with ≥ 2 words (simulated) | −6 dB: tie (90.1 vs 90.1), a new false stop on 4 of 8 copies; 2 words: brown noise −5.7 with a false stop. The pre-registered −3 dB version was adopted (section 5) |
 | ElevenLabs `scribe_v3_live` as the recogniser | Best text accuracy (0.90 vs Whisper 0.86) but first text ~0.75 s; full system 88.6 vs 89.8 (above) |
 | Gemini Live as the recogniser | first text 1.82 s median, nothing on 38 of 121 events; 0 of 56 stops by 1.0 s (Whisper 25) |
 | Dialect-tuned Whisper (`oddadmix/...-arabic-dialectal-v2`) | +4 on team calls, but dev 88.8: a TV false stop, «لحظة» heard «لحفة» |
