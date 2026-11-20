@@ -9,9 +9,12 @@ An adaptive energy detector notices caller sound while the agent talks. A local 
 GPU) re-reads that burst every ~300 ms, and Arabic rules decide: a floor bid («لحظة», «لا لا», «اصبر», «ماني فاهم», a
 question, a real sentence) means STOP; a backchannel («إيه», «تمام»), an echo of the agent, side talk, TV or noise means
 keep talking. Loudness is judged *relative to this caller*, so a soft speaker is not mistaken for background noise.
+A second, cloud recogniser (ElevenLabs live) listens in parallel and may only *add* a STOP where Whisper heard nothing
+useful ("rescue").
 
-**Scored code** (`my_system.py`, `turn_rules.py`): the Nov 20 changes (speculative STOP + RESUME, dialect cues,
-slow-decode watchdog) plus the Nov 21 "default stop" (section 5), each measured before it was adopted.
+**Scored code** (`my_system_hybrid.py` = `my_system.py` + rescue, `turn_rules.py`): the Nov 20 changes (speculative
+STOP + RESUME, dialect cues, slow-decode watchdog), the Nov 21 "default stop" and the ElevenLabs rescue (section 5),
+each measured before it was adopted. Run: `python my_system_hybrid.py`.
 
 ## 2. Why this approach
 
@@ -38,8 +41,11 @@ caller audio, 20 ms frames (agent TEXT used for echo detection)
  │     STOP:  a question, or 3+ real words, unless more than 6 dB quieter than the caller's voice
  │     STOP?: 2 real words at the caller's own loudness = speculative STOP; RESUME if not confirmed within 450 ms
  │     STOP:  "default stop": 1 s of speech as loud as the caller's own voice with any non-backchannel word
+ ├─ rescue: ElevenLabs live text of the same burst → same decide(); may STOP only if Whisper's own reading was
+ │          empty, a stock phrase or "too little to tell" (it can never overrule Whisper's echo/side-talk/quiet vetoes)
  └─ end of turn: caller quiet 300 ms → Whisper reads their last 4 s → unfinished? wait up to 1.6 s, else 0.7 s
 Fallback: Whisper fails 3 times, or decodes get slow (median > 600 ms): loudness-only rule, Whisper retried in background.
+No internet / ElevenLabs down: no rescue, the Whisper system exactly (it never waits for the cloud).
 ```
 
 The caller reference voice is the loudest frame of sustained caller speech so far in the call, outside the burst being
@@ -49,16 +55,16 @@ judged, reset per call. A live browser demo (`demo.py`) runs the same system on 
 
 | | |
 |---|---|
-| Stop latency, dev (real time) | median 476 ms after the intent was evident, p90 525 ms |
+| Stop latency, dev (real time) | median 334 ms after the intent was evident, p90 524 ms (Whisper alone 476 / 525) |
 | Where the time goes | 300 ms of burst before the first decode + ~280 ms decode + up to 100 ms for the next slot |
 | Hardware | RTX 3060 Laptop GPU (6 GB), ~2.4 GB used, mains power (battery: decodes ~35 % slower); ~809 M parameters |
-| Cloud calls and cost | none in the scored system |
+| Cloud calls and cost | ElevenLabs `scribe_v3_live`, caller channel streamed (~165 credits per 10 min of audio); its text reaches the rules ~0.7 s after speech, so it only adds stops Whisper missed, never makes ours faster |
 
 ## 5. Results
 
 | Set (live, real time) | Core | R | S |
 |---|---|---|---|
-| Dev, 24 calls | 97.3 | 0.94 | 1.00 |
+| Dev, 24 calls | 97.5 (Whisper alone 97.3) | 0.95 | 1.00 |
 | Organisers' checkpoint, 16 new calls (earlier code, Nov 19) | 77.0 | 0.63 | 0.92 |
 | Team data, locked test split, 11 calls, run once | 74.7 (was 72.2) | 0.60 | 1.00 |
 | Team data, train 44 / validation 11 calls | 64.2 / 65.0 | 0.49 / 0.45 | 0.92 / 1.00 |
@@ -78,13 +84,15 @@ telephone band 300–3400 Hz + G.711, pink noise at 15 dB SNR, car-like brown no
 | Check fold, 16 calls (Core) | dev | −12 dB | loud start | click | phone | pink | brown | echo | **mean** |
 |---|---|---|---|---|---|---|---|---|---|
 | Whisper, Nov 20 rules (live) | 92.9 | 91.1 | 89.6 | 92.9 | 89.0 | 88.4 | 93.5 | 81.3 | **89.8** |
-| **Whisper + default stop (submitted)**, simulated | 96.8 | 94.4 | 89.9 | 96.8 | 91.5 | 92.5 | 94.4 | 87.2 | **93.0** |
+| Whisper + default stop, simulated | 96.8 | 94.4 | 89.9 | 96.8 | 91.5 | 92.5 | 94.4 | 87.2 | **93.0** |
+| Whisper + default stop (live) | 96.2 | 94.6 | 89.7 | 95.5 | 93.2 | 93.7 | 93.6 | 85.2 | **92.7** |
+| **+ ElevenLabs rescue (submitted, live)** | 96.3 | 94.6 | 92.5 | 96.5 | 94.5 | 93.5 | 94.9 | 89.7 | **94.0** |
 | ElevenLabs live (experiment) | 88.9 | 89.8 | 89.3 | 89.1 | 88.4 | 85.3 | 87.6 | 90.2 | **88.6** |
 
 No interruption was missed on the check fold in any copy; one false stop each on the phone copy. Room echo is the
 Nov 20 system's weakest condition (stops slow to p90 1.3 s); on the inspect fold, phone and noise copies each cost
-one interruption. The ElevenLabs version (`my_system_eleven.py`, same rules) is not submitted: cloud-dependent, slower on
-clean audio, and 1.2 points lower on average (within the ±2 spread).
+one interruption. ElevenLabs *instead of* Whisper (`my_system_eleven.py`, same rules) is not submitted: slower on clean
+audio and 1.2 points lower on average, but much better in room echo (90.2 vs 81.3), which led to the rescue below.
 
 **These calls are not truly unseen:** the word rules were first written (Nov 17) with all 24 dev transcripts available,
 so the table measures robustness, not unseen-call performance. The organisers' unseen checkpoint (77.0) is the better
@@ -104,6 +112,13 @@ passed: check-fold mean 90.1 → 93.0 in the deterministic replay, no set lower,
 scored lower on any of the 8 sets. Live real-time confirmation (check fold): dev 92.9 → 96.2, click 92.9 → 95.5, room echo
 81.3 → 85.2, 0 false stops. It catches the ambiguous «خلاص خلاص… فهمت», the overlap «إيه الأحد … زين، احجزه» in noise, and
 an echoey interruption earlier. Honest size: 4 different calls improved, none harmed; we expect +1 to +3 on new calls.
+
+**Nov 21 change, kept: ElevenLabs "rescue".** Whisper is fast but sometimes blind (stock phrases, echo); ElevenLabs is
+slower but never invents subtitle text. One variant and its rule were written before any run
+(`analysis/PREREG_hybrid_nov20.md`): ElevenLabs' text goes through the same `decide()` and may only STOP a burst
+Whisper read as empty, a stock phrase or "too little to tell". Live, check fold: mean 92.7 → 94.0, worst set −0.2 (pink
+noise), loud start +2.8, echo +4.5, no new false stop, 0 disconnects. 12 of its 13 STOPs were cues Whisper missed
+(«لحظة», «بس», «اسمع», «لأ»); one was TV news text that did no harm here but is the real risk (section 7).
 
 ## 5b. Tried and rejected
 
@@ -148,27 +163,29 @@ Unseen data (team calls, live tests):
 
 ## 7. Strengths, weaknesses and trade-offs
 
-**Strong:** backchannels, coughs, laughter and echo; clear Gulf cues within ~0.2–0.5 s; quiet or loud callers; fully
-local. **Weak:** speech from a TV or person as loud as the caller; words whose meaning is in the tone («خلاص», «طيب»);
-interruptions without a cue need 3 real words; noisy phone lines; room echo; end of turn during dictation.
+**Strong:** backchannels, coughs, laughter and echo; clear Gulf cues within ~0.2–0.5 s; quiet or loud callers; still
+works without internet (rescue off). **Weak:** speech from a TV or person as loud as the caller; words whose meaning is in the tone («خلاص», «طيب»);
+interruptions without a cue need 3 real words; noisy phone lines; room echo; end of turn during dictation. The rescue reads background TV more clearly than
+Whisper, so it could add a false stop on a TV call; it needs internet at the venue (without it: the Whisper system).
 **Trade-off:** we prefer a late stop over a false stop (a false stop zeroes a KEEP event). The 3-word rule and the −6 dB
 line were partly chosen while looking at dev; the −12 dB line has a 10 dB margin.
 
 **With another week:** a fast keyword spotter for the first 300 ms (latency and first-decode errors are the biggest
-remaining loss); combining ElevenLabs' accuracy and echo robustness with Whisper's speed; a question-context gate (the
+remaining loss); a question-context gate (the
 agent just asked «؟»), which needs more answer-to-question data to validate.
 
 ## 8. External services, models and data
 
-**Scored system (local only):** faster-whisper large-v3-turbo (CTranslate2, float16), NumPy, websockets, NVIDIA cuBLAS /
-cuDNN 12. No network call, no other model.
+**Scored system:** faster-whisper large-v3-turbo (CTranslate2, float16, local GPU), NumPy, websockets, NVIDIA cuBLAS /
+cuDNN 12, and **ElevenLabs `scribe_v3_live`** (cloud, caller audio only, rescue STOPs; counts in our latency).
 
 | Kind | Name | Status |
 |---|---|---|
 | Model | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | **scored system** (local, GPU) |
 | Model | Silero VAD (bundled in faster-whisper, CPU) | offline analysis only |
 | Model | `Systran/faster-whisper-small`; `oddadmix/whisper-large-v3-turbo-arabic-dialectal-v2` (Apache 2.0) | tested, not used |
-| API | ElevenLabs: `scribe_v3_live`, `scribe_v1` (speech-to-text); `eleven_v4_turbo`, `eleven_flash_v2_5` (text-to-speech) | demo and experiments only |
+| API | ElevenLabs `scribe_v3_live` (speech-to-text, streamed) | **scored system** (rescue STOPs) and demo |
+| API | ElevenLabs: `scribe_v1` (speech-to-text); `eleven_v4_turbo`, `eleven_flash_v2_5` (text-to-speech) | demo and experiments only |
 | API | Google AI Studio Gemini Live: `gemini-2.5-flash-native-audio-latest` | experiment only |
 | API | Munsit (CNTXT AI): `faseeh-v1-preview` text-to-speech, `audio/transcribe` | demo / comparison only |
 | API | OpenRouter: `anthropic/claude-haiku-5.5` (demo writer, LLM judge test), `google/gemini-2.5-flash-lite`, `google/gemini-2.5-flash`, `google/gemini-3.7-flash`, `openai/gpt-audio-mini`, `meta-llama/llama-3.3-70b-instruct`, `openai/gpt-4.1-mini`, `qwen/qwen3.8-omni-flash`, `mistralai/voxtral-small-24b-2507` | demo and experiments only |
