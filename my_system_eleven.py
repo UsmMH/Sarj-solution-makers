@@ -1,5 +1,6 @@
-"""Team 4 ALTERNATIVE system: ElevenLabs live speech-to-text (scribe_v3_live) instead of local Whisper.
-NOT the submitted system (that is my_system.py). Everything except the recogniser is the same code as my_system.py:
+"""Team 4 SUBMITTED system (Nov 20 freeze): ElevenLabs live speech-to-text (scribe_v3_live) instead of local Whisper.
+Start it with `python my_system_eleven.py --host 0.0.0.0` (my_system.py = the Whisper alternative, which this file builds
+on). Everything except the recogniser is the same code as my_system.py:
 adaptive floor, burst tracking, the caller's reference voice, turn_rules.decide(), speculative STOP + RESUME, energy fallback.
 
 How it differs:
@@ -26,7 +27,9 @@ from pathlib import Path
 import numpy as np
 
 import my_system as M
-from my_system import MySystem, TEAM, loudness_db, loud_warning
+from my_system import MySystem, loudness_db, loud_warning
+
+TEAM = "Team 4 (for now :D)"                # your team name, shown on the scoreboard
 from ttbench.server import run
 from turn_rules import NEUTRAL, decide, eot_incomplete, is_ack, tokens
 
