@@ -223,3 +223,12 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
 ## Team docs
 - Team plan (Claude Doc): https://claude.ai/artifact/DMXU1CVZyCBUJCeu2sTkPV
 - Older summaries: English https://claude.ai/artifact/9W63HZNcw2Cw3QkpS48H8U, Arabic https://claude.ai/artifact/CfBYHPM5zgBachwK8Qzu5K (out of date since Nov 17).
+
+## NOV 20 AFTERNOON (supersedes "freeze d12ca5b" above)
+- New scored candidate in `my_system.py` / `turn_rules.py` (uncommitted until the user commits): B speculative STOP on
+  2 loud words + RESUME (`SPEC_STOP=off` disables), C dialect cues + Gulf ض/ظ + phonetic near-spelling, F slow-decode
+  watchdog (median of 5 decodes > 600 ms -> energy rule). Rejected A (int8, small model, 200 ms first decode), burst
+  merging, stock stripping, confidence gates. Full numbers: `analysis/REPORT_nov20.md`; write-up section 5c.
+- Live: dev 95.7, val 65.0, train 64.2, LOCKED TEST (run once) 74.7 vs frozen 72.2. Do not tune on data/split_test.
+- `sim.py` = deterministic virtual-clock replay (decode cache in analysis/sim_cache); `analysis/variant.py NAME ATTR=V`
+  runs variants; splits from `make_splits.py`. Tests: test_dialect_rules.py, test_spec_resume.py, test_asr_robustness.py.

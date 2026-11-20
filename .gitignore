@@ -21,3 +21,7 @@ demo/voice_samples/
 data/v3_bench/
 data/SARJ_dataset_v3/
 models/
+data/split_train/
+data/split_val/
+data/split_test/
+analysis/sim_cache/

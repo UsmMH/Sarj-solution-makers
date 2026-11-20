@@ -23,7 +23,9 @@ _DIACRITICS = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭـ]")   # tashkeel, tatweel
 _LETTERS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي",
                           # dialect spellings of the Gulf "g" and "v" (the Arabic-dialect Whisper writes «وڨف»/«وگف»
                           # for «وقف»): map them back so cues and phrases still match
-                          "گ": "ق", "ڨ": "ق", "ڤ": "ف"})
+                          "گ": "ق", "ڨ": "ق", "ڤ": "ف",
+                          # Gulf speech merges /dˤ/ and /ðˤ/ (ض, ظ): speakers and the ASR write either («لحضة»/«لحظة»)
+                          "ض": "ظ"})
 
 
 def normalize(text: str) -> str:
@@ -44,7 +46,17 @@ STOP_CUES = _words("""
     اصبر اصبري اصبروا
     ستنى ستنا ستنه
     اسمع اسمعني اسمعي اسمعيني بس عفوا سوري sorry wait stop pardon
+    انطر انطري نطر نطري
+    معليش معلش معلیش كفايه تمهل
 """)
+# Nov 20 (C, dialect robustness), general Gulf / Saudi forms, none taken from a dev / train / validation clip:
+#   انطر/نطر = "wait" (Hijazi, Eastern, Kuwaiti, Bahraini; from انتظر); معليش/معلش = "excuse me / sorry", the dialect
+#   counterpart of «عفوا» which is already a cue; كفاية = "enough"; تمهل = MSA "slow down".
+# Negation or correction OPENING the turn is a floor bid in every dialect, like «لا» at the start (already a cue):
+# مو (Najdi/Gulf), مب (Emirati/Qatari), موب/مهوب (Najdi), مش (Hijazi), ماهو (Najdi/Hijazi), قصدي ("I mean", correction).
+START_CUES = _words("مو مب موب مهب مهوب مش ماهو قصدي")
+# ...except the fixed "it's fine" answers: «مو مشكلة» (no problem), «مو بطال / مب شين» (not bad), «مو غلط» (not wrong)
+NEG_POSITIVE = _words("مشكله مشكل بطال شين غلط خطا مهم")
 PREFIX_CUES = ("لحظ", "استن")            # a word still being said: «لحظ…», «استن…»
 NOT_CUES = _words("استاذ استاذه")         # common words one letter from a cue: «أستاذ» ~ «استنا» false-stopped live (Nov 18)
 # Multi-word floor bids from general Saudi / Gulf phone speech (added Nov 18, NOT taken from the dev transcripts;
@@ -57,9 +69,14 @@ PHRASE_CUES = [normalize(p) for p in """
     غلط|مو صحيح|مب صحيح|مو صح|مب صح|خطا|مو كذا|مب كذا
     عندي سؤال|بسالك|ابي اسالك|ابغى اسالك|ممكن سؤال|ابي اكلم|ابغى اكلم|خلني اقول|خليني اقول|خلني اكمل|ممكن اقول
     ما طلبت|ما حجزت|مو انا|ليش كذا|كيف يعني|يعني ايش|يعني وش
+    لو سمحت|لو سمحتي|اسمح لي|اسمحلي|اسمحي لي|عن اذنك|عن اذنج|شوي شوي|على مهلك|على مهلج|بشويش
+    ابغى اعرف|ابي اعرف|ودي اعرف|ممكن اعرف|عندي استفسار|ممكن استفسر
 """.replace("\n", "|").split("|") if p.strip()]
 PHRASE_RE = re.compile(r"(?:^| )(" + "|".join(re.escape(p) for p in sorted(PHRASE_CUES, key=len, reverse=True)) + r")(?: |$)")
-QUESTION_WORDS = _words("كم شنو وش ايش ليش ليه وين متى شلون كيف مين لماذا ماذا هل شو اش")
+QUESTION_WORDS = _words("كم شنو وش ايش ليش ليه وين متى شلون كيف مين لماذا ماذا هل شو اش"
+                        # Nov 20: dialect question words (Hijazi امتى/ايمتى/فين, Kuwaiti/Bahraini منو/شكثر/اشلون,
+                        # general بكم "how much", وشلون/وشو Najdi)
+                        " امتى ايمتى فين منو شكثر شقد بكم اشلون وشلون وشو")
 SIDE_TALK = _words("يمه يما ماما بابا يابه اسكت اسكتي")          # talking to someone in the room
 SIDE_TALK_PHRASE = re.compile(r"(?:^| )يا (?:ولد|ولدي|بنت)(?: |$)")
 ACKS = _words("""
@@ -93,16 +110,30 @@ def is_ack(tok: str) -> bool:
     return tok in ACKS or bool(LAUGH.fullmatch(tok)) or any(_close(tok, a) for a in ACKS if len(a) >= 3)
 
 
+# Letters a speaker or the ASR swaps for one another (urban Hijazi ث->ت/س, ذ->ز/د; voicing ت~د seen live «تقيقة»
+# for «دقيقة»; Gulf ق/ج/ك/گ for /g/): a near-spelling of a cue may start with any letter of the cue's class.
+_PHON = {}
+for _cls in ("تثدط", "ذزد", "سصث", "ظضذ", "قجكغ"):
+    for _c in _cls:
+        _PHON.setdefault(_c, set()).update(_cls)
+
+
+def _same_start(a: str, b: str) -> bool:
+    return a[0] == b[0] or b[0] in _PHON.get(a[0], ())
+
+
 def find_cue(toks: list):
     for i, t in enumerate(toks):
         if t == "لا" and (i == 0 or (i == 1 and is_ack(toks[0]))):   # «لا» at the start, or «إيه… لا»; not mid-sentence
+            return t
+        if t in START_CUES and (i == 0 or (i == 1 and is_ack(toks[0]))) and i + 1 < len(toks) and                 toks[i + 1] not in NEG_POSITIVE:              # «مو هذا…», «إيه بس مو…»: needs a next word, not «مو مشكلة»
             return t
         if t in STOP_CUES or (len(t) >= 3 and t.startswith(PREFIX_CUES)):
             return t
         # near-spellings («اصبار», «دقيق») count, but only with the same first letter: «وأني» ~ «ثواني» and
         # «أستاذ» ~ «استنا» false-stopped on TV / normal speech (Nov 18)
         if t not in NOT_CUES and len(t) >= 4 and \
-                any(len(c) >= 4 and c[0] == t[0] and SequenceMatcher(None, t, c).ratio() >= 0.8 for c in STOP_CUES):
+                any(len(c) >= 4 and _same_start(t, c) and SequenceMatcher(None, t, c).ratio() >= 0.8 for c in STOP_CUES):
             return t
     return None
 
@@ -145,6 +176,12 @@ def eot_incomplete(text: str):
     return False, "sounds finished"
 
 
+def START_CUES_PREV(norm: str, pos: int) -> str:
+    """The word just before position pos in a normalised string."""
+    before = norm[:pos].split()
+    return before[-1] if before else ""
+
+
 def decide(text: str, agent_text: str = "", peak_db=None, ref_db=None):
     """(stop?, reason). False means 'no reason to stop yet': a longer burst may still be decoded again.
 
@@ -171,6 +208,8 @@ def decide(text: str, agent_text: str = "", peak_db=None, ref_db=None):
     if cue:
         return True, f"cue «{cue}»"
     phrase = PHRASE_RE.search(norm)
+    if phrase and phrase.group(1) in NEG_POSITIVE and             f" {START_CUES_PREV(norm, phrase.start(1))} " in " مو مب موب مهب مهوب مش ماهو مانيب ماني ":
+        phrase = None                                          # «مو غلط» = "not wrong", agreement
     if phrase:
         return True, f"phrase «{phrase.group(1)}»"
     if peak_db is None:

@@ -74,6 +74,12 @@ EOT_HOLD_MS = 1600                          # text ends mid-thought: wait this l
 # --- robustness (no effect on decisions while Whisper works) --------------------------------------------------------------
 ASR_MAX_FAILS = 3                           # this many failed decodes in a row -> temporary energy-rule fallback
 RETRY_S = 10.0                              # while in fallback: try to bring Whisper back this often (reload the model if needed)
+SPEC_STOP = os.environ.get("SPEC_STOP", "on").lower() != "off"   # B: speculative STOP on 2 loud content words
+SPEC_REL_DB = -3.0                          # ...only when the burst is about as loud as the caller's own voice
+SPEC_RESUME_MS = 450                        # not confirmed by the next decode within this -> RESUME (0.5 credit, not 0)
+SLOW_MS = 600                               # median of the last SLOW_N burst decodes above this -> energy rule: in the sim,
+SLOW_N = 5                                  # Whisper at ~550 ms/decode already scores below the energy rule (dev 84.6 vs 86.1,
+FAST_MS = 400                               # val 33.7 vs 56.0); switch back once a probe decode takes less than FAST_MS
 WATCHDOG_FRAMES = 50                        # every 1 s the 20 ms loop checks that the worker thread is still alive
 
 
@@ -118,7 +124,8 @@ def loudness_db(samples: np.ndarray) -> float:
 class Asr:
     """Local Whisper on the GPU. One per process, loaded BEFORE the server starts (the harness wants a hello fast)."""
 
-    def __init__(self):
+    def __init__(self, model_name=None):
+        self.model_name = model_name or ASR_MODEL
         self.model = None
         self.ok = False
         self._retry_lock = threading.Lock()
@@ -126,7 +133,7 @@ class Asr:
 
     def _load_model(self):
         from faster_whisper import WhisperModel
-        self.model = WhisperModel(ASR_MODEL, device="cuda", compute_type=ASR_COMPUTE)
+        self.model = WhisperModel(self.model_name, device="cuda", compute_type=ASR_COMPUTE)
         self.transcribe(np.zeros(SR, dtype=np.float32))[0]       # warm-up: a missing CUDA library shows up here, not mid-call
 
     def _diagnose(self):
@@ -155,7 +162,7 @@ class Asr:
             t0 = time.perf_counter()
             self._load_model()
             self.ok = True
-            print(f"[asr] {ASR_MODEL} on cuda/{ASR_COMPUTE} ready in {time.perf_counter() - t0:.1f}s", flush=True)
+            print(f"[asr] {self.model_name} on cuda/{ASR_COMPUTE} ready in {time.perf_counter() - t0:.1f}s", flush=True)
         except Exception as ex:                                  # no CPU fallback: ~3 s per decode is useless here
             self.ok = False
             self.model = None
@@ -194,12 +201,18 @@ class Asr:
             self._retry_lock.release()
 
     def transcribe(self, audio: np.ndarray, max_new_tokens: int = 24):
-        """-> (text, mean avg_logprob of the segments): Whisper's own confidence, logged to study garbled decodes."""
+        """-> (text, mean avg_logprob of the segments): Whisper's own confidence, logged to study garbled decodes.
+        Also sets self.last_info = {logprob, no_speech, compression} (only the worker thread decodes bursts)."""
         segs, _ = self.model.transcribe(audio, language="ar", beam_size=1, temperature=0.0,
                                         condition_on_previous_text=False, without_timestamps=True,
                                         max_new_tokens=max_new_tokens)
-        segs = list(segs)
+        t0 = time.perf_counter()
+        segs = list(segs)                                        # (decoding happens here: segments are lazy)
+        self.last_ms = (time.perf_counter() - t0) * 1000
         logprob = float(np.mean([s.avg_logprob for s in segs])) if segs else 0.0
+        self.last_info = {"logprob": logprob,
+                          "no_speech": float(max(s.no_speech_prob for s in segs)) if segs else 1.0,
+                          "compression": float(max(s.compression_ratio for s in segs)) if segs else 0.0}
         return " ".join(s.text.strip() for s in segs), logprob
 
 
@@ -240,8 +253,12 @@ class MySystem(System):
         self._burst_start = 0
         self._quiet = 0
         self._last_req_end = 0
+        self._spec = None                                        # (burst_id, sample index of the speculative STOP)
+        self._resume_flag = False
         self._stop_flag = False
         self._fails = 0
+        self._recent_ms = collections.deque(maxlen=SLOW_N)     # decode times of the last bursts (watchdog)
+        self._slow = False                                       # decodes too slow to be useful: energy rule
         self._fallback_said = False
         self._frames = 0
         self._thread = None
@@ -251,7 +268,7 @@ class MySystem(System):
     @property
     def _asr_live(self):
         """Whisper is usable right now. Anything else = the temporary energy-rule fallback."""
-        return ASR.ok and self._fails < ASR_MAX_FAILS
+        return ASR.ok and self._fails < ASR_MAX_FAILS and not self._slow
 
     def _start_worker(self):
         self._thread = threading.Thread(target=self._worker, daemon=True)
@@ -295,6 +312,14 @@ class MySystem(System):
 
         if self.agent_talking:
             if self.stopped:
+                if self._resume_flag:                          # B: a speculative STOP was not confirmed
+                    with self._lock:
+                        self._resume_flag, self._spec = False, None
+                        self._stop_flag = False
+                    self.stopped = False
+                    return "RESUME"
+                if self._spec is not None and (self._n - self._spec[1]) * 1000 // SR > SPEC_RESUME_MS:
+                    self._spec = None                          # too late for a cheap take-back: stay stopped
                 return None
             if self._asr_live:
                 self._track_burst(loud_stop)
@@ -364,6 +389,7 @@ class MySystem(System):
             self._quiet = 0
             self._req = None
             self._stop_flag = False
+            self._spec, self._resume_flag = None, False
             self._eot_id += 1                                  # a new agent turn: old end-of-turn probes are stale
             self._eot_probed, self._eot_res, self._eot_req = False, None, None
 
@@ -412,10 +438,17 @@ class MySystem(System):
         self._wake.set()
 
     def _do_eot(self, ereq):
+        res = self._eot_compute(ereq)
+        if res is not None:
+            self._eot_apply(res)
+
+    def _eot_compute(self, ereq):
+        """Decode the end of the caller's turn. -> (eot_id, incomplete?, reason) or None. (Split from _eot_apply so
+        sim.py can run the decode now and let the result land later on a virtual clock.)"""
         eot_id, start, end = ereq
         audio = self._snapshot(max(start, 0), end)
         if audio is None:
-            return
+            return None
         try:
             t0 = time.perf_counter()
             text, _ = ASR.transcribe(audio, max_new_tokens=64)
@@ -423,13 +456,16 @@ class MySystem(System):
         except Exception as ex:
             self._fails += 1
             print(f"[asr] eot decode failed ({ex!r}); {self._fails} in a row", flush=True)
-            return
+            return None
         inc, why = eot_incomplete(text)
         line = f"[eot] ({ms:.0f} ms): {text!r} -> {'WAIT' if inc else 'take turn'} ({why})"
         print(line, flush=True)
         self._log(line)
-        if eot_id == self._eot_id:                             # the caller has not made sound since
-            self._eot_res = (eot_id, inc, why)
+        return eot_id, inc, why
+
+    def _eot_apply(self, res):
+        if res[0] == self._eot_id:                             # the caller has not made sound since
+            self._eot_res = res
 
     def _snapshot(self, start, end):
         with self._lock:
@@ -467,6 +503,37 @@ class MySystem(System):
                 self._log(line)
                 time.sleep(0.05)                               # never spin on a persistent error
 
+    def _slow_step(self):
+        """Decodes were too slow (busy GPU?): the 20 ms loop is on the energy rule. Probe now and then; switch back
+        when a decode is fast again."""
+        if not self._fallback_said:
+            self._fallback_said = True
+            self._probe_at = time.monotonic() + RETRY_S
+            loud_warning("TOO SLOW: temporary fallback to the loudness-only rule",
+                         [f"median of the last {SLOW_N} decodes above {SLOW_MS} ms ({sorted(self._recent_ms)})",
+                          "Another GPU job running? On battery? Probing again every %.0f s." % RETRY_S])
+        with self._lock:
+            self._req, self._eot_req = None, None
+            self._wake.clear()
+        time.sleep(0.5)
+        if time.monotonic() < self._probe_at:
+            return
+        self._probe_at = time.monotonic() + RETRY_S
+        try:
+            ASR.transcribe(np.random.default_rng(0).normal(0, 0.01, SR * 3 // 2).astype(np.float32))
+            ms = ASR.last_ms
+        except Exception:
+            ms = float("inf")
+        self._log(f"[asr] slow-mode probe: {ms:.0f} ms")
+        if ms < FAST_MS:
+            self._recent_ms.clear()
+            self._slow = False
+            self._fallback_said = False
+            self._reset_burst()
+            line = "[asr] decodes are fast again: leaving the loudness-only fallback"
+            print(line, flush=True)
+            self._log(line)
+
     def _fallback_step(self):
         """Whisper is down: the 20 ms loop is on the energy rule. Retry in the background; switch back when it works."""
         if not self._fallback_said:
@@ -488,6 +555,9 @@ class MySystem(System):
             self._log(line)
 
     def _worker_step(self, silence):
+        if self._slow and ASR.ok and self._fails < ASR_MAX_FAILS:
+            self._slow_step()
+            return
         if not self._asr_live:
             self._fallback_step()
             return
@@ -507,29 +577,61 @@ class MySystem(System):
             self._do_eot(ereq)
         if req is None:
             return
+        res = self._decode(req)
+        if res is not None:
+            self._apply(res)
+
+    def _decode(self, req):
+        """Decode one burst request and judge it. -> (epoch, stop?) or None. No state is changed here except the
+        failure counter, so sim.py can apply the result later on a virtual clock."""
         epoch, burst_id, start, end, agent_text, ref = req
         audio = self._snapshot(start, end)
         if audio is None:
-            return
+            return None
+        body = audio[min(PAD_MS * SR // 1000, max(0, len(audio) - FRAME_SAMPLES)):]   # loudness: the burst only, not the lead-in
+        fr = body[: len(body) // FRAME_SAMPLES * FRAME_SAMPLES].reshape(-1, FRAME_SAMPLES)
+        pk = 20 * np.log10(np.sqrt((fr.astype(np.float64) ** 2).mean(axis=1)).max() + 1e-12) if len(fr) else -99.0
         try:
             t0 = time.perf_counter()
             text, logprob = ASR.transcribe(audio)
             ms = (time.perf_counter() - t0) * 1000
             self._fails = 0
+            self._recent_ms.append(getattr(ASR, "last_ms", ms))
+            if len(self._recent_ms) == SLOW_N and float(np.median(self._recent_ms)) > SLOW_MS:
+                self._slow = True                              # the 20 ms loop switches to the energy rule
         except Exception as ex:
             self._fails += 1
             print(f"[asr] decode failed ({ex!r}); {self._fails} in a row", flush=True)
-            return
-        body = audio[min(PAD_MS * SR // 1000, max(0, len(audio) - FRAME_SAMPLES)):]   # loudness: the burst only, not the lead-in
-        fr = body[: len(body) // FRAME_SAMPLES * FRAME_SAMPLES].reshape(-1, FRAME_SAMPLES)
-        pk = 20 * np.log10(np.sqrt((fr.astype(np.float64) ** 2).mean(axis=1)).max() + 1e-12) if len(fr) else -99.0
+            return None
         stop, why = decide(text, agent_text, peak_db=float(pk), ref_db=ref)
+        spec = False
+        if SPEC_STOP and not stop and ref is not None and pk - ref >= SPEC_REL_DB and why == "acknowledgement or too little to tell":
+            from turn_rules import tokens, NEUTRAL, is_ack
+            content = {t for t in tokens(text) if t not in NEUTRAL and not is_ack(t)}
+            spec = len(content) >= 2                           # two loud content words: stop now, confirm on the next decode
         rel = f"{pk - ref:+.0f}" if ref is not None else "n/a"
         line = (f"[asr] burst {burst_id} {len(audio) / SR:.1f}s ({ms:.0f} ms, lp {logprob:.2f}, pk {pk:.0f} dB, "
                 f"vs caller {rel} dB): {text!r} -> "
-                f"{'STOP' if stop else 'keep'} ({why})")
+                f"{'STOP' if stop else 'SPEC-STOP' if spec else 'keep'} ({why})")
         print(line, flush=True)
         self._log(line)
+        return epoch, stop, spec, burst_id
+
+    def _apply(self, res):
+        epoch, stop, spec, burst_id = res
+        with self._lock:
+            if self._spec is not None and epoch == self._epoch and burst_id == self._spec[0] and self.stopped:
+                if stop:
+                    self._spec = None                          # confirmed
+                elif not spec:
+                    self._resume_flag = True                   # next decode does not back it up: take it back
+                return
+        if spec and not stop:
+            with self._lock:
+                if epoch == self._epoch and self.agent_talking and not self.stopped:
+                    self._spec = (burst_id, self._n)
+                    self._stop_flag = True
+            return
         if stop:
             with self._lock:
                 if epoch == self._epoch and self.agent_talking and not self.stopped:
