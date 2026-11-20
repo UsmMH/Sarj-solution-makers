@@ -10,8 +10,8 @@ GPU) re-reads that burst every ~300 ms, and Arabic rules decide: a floor bid («
 question, a real sentence) means STOP; a backchannel («إيه», «تمام»), an echo of the agent, side talk, TV or noise means
 keep talking. Loudness is judged *relative to this caller*, so a soft speaker is not mistaken for background noise.
 
-**Submitted commit: `bdc7b80`.** Scored code (`my_system.py`, `turn_rules.py`) last changed in `21472df` (Nov 20):
-speculative STOP + RESUME, dialect cues, slow-decode watchdog. Everything after it is documentation and test tools.
+**Scored code** (`my_system.py`, `turn_rules.py`) last changed in commit `21472df` (Nov 20): speculative STOP + RESUME,
+dialect cues, slow-decode watchdog. The handed-in commit adds only documentation and test tools on top of it.
 
 ## 2. Why this approach
 
