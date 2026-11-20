@@ -28,7 +28,7 @@ try:                                        # Arabic in log lines must never cra
 except Exception:
     pass
 
-TEAM = "Team 4 (for now :D)"                # your team name, shown on the scoreboard
+TEAM = "Team 4"                # your team name, shown on the scoreboard
 
 SR = 16000
 FRAME_MS = 20                               # each on_frame call covers 20 ms of audio

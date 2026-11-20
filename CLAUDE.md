@@ -9,7 +9,7 @@ Nov 19 (Day 5). Code freeze and final submission: **Saturday Nov 21, 12:00** (mo
 - Final ranking = 80 % Core score on a **hidden Arabic stream (Day 6, Nov 20)** + 20 % judges (originality 10, practical applicability 5, clarity of demo 5). Day 6 also has an unscored live-microphone demo the judges watch.
 - Deadlines: **code freeze AND final submission Saturday Nov 21, 12:00** (moved from Nov 19/20; `python -m ttbench.ready` prints commit hash + service list). The connection check is most likely not happening (user, Nov 18): don't plan around it, but still test the system on the venue network before the final.
 - The Day 3 checkpoint did not happen as a test; mentors gave advice instead: no new data recording (augment the 24 calls), cloud APIs are allowed (they count in latency, must be declared).
-- Team name constant in `my_system.py` must stay: `TEAM = "Team 4 (for now :D)"`. Also keep `PEAK_DB = -20.0`.
+- Team name constant in `my_system.py` must stay: `TEAM = "Team 4"` (changed from "Team 4 (for now :D)" on Nov 20). Also keep `PEAK_DB = -20.0`.
 - Cost-conscious with OpenRouter: good models, but watch the price (key limit $1; ~$0.05 used by Nov 18).
 
 ## Repo layout (this folder = the git repo, branch `main`)

@@ -1,4 +1,4 @@
-# Write-up: Team 4 (for now :D)
+# Write-up: Team 4
 
 ## 1. The idea
 
@@ -166,4 +166,4 @@ cuDNN 12. No network call, no other model.
 
 ## 9. Team
 
-Team 4 (for now :D): Usama, Rayan Bin Malik, Nada Alosaimi, Rana Alamri and Lena Alhaobani.
+Team 4: Usama, Rayan Bin Malik, Nada Alosaimi, Rana Alamri and Lena Alhaobani.
