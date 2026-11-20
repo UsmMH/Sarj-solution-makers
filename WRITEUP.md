@@ -85,9 +85,8 @@ one interruption. The ElevenLabs version (`my_system_eleven.py`, same rules) is 
 clean audio, and 1.2 points lower on average (within the ±2 spread).
 
 **These calls are not truly unseen:** the word rules were first written (Nov 17) with all 24 dev transcripts available,
-so the table measures robustness, not unseen-call performance. A clean ElevenLabs rebuild whose rules were written
-without reading any transcript scored 77.5 on the same check fold, close to the organisers' unseen checkpoint (77.0):
-we expect unseen calls in the high 70s.
+so the table measures robustness, not unseen-call performance. The organisers' unseen checkpoint (77.0) is the better
+guide: we expect unseen calls in the high 70s.
 
 **Nov 20 changes, kept:** (B) speculative STOP on two loud words with a RESUME guard: fired 11 times in replays, always
 on a real interruption, ~300 ms earlier, never needed a RESUME; (C) dialect cues («انطر», «معليش», «لو سمحت», negation
