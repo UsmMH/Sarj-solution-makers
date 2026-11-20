@@ -150,20 +150,32 @@ the −6 dB line help dev most and are the closest to dev-fitted (`analysis/REPO
 
 ## 6. Where it fails
 
+Dev set (24 calls), final system, from `python -m ttbench.summary runs/live-final-dev --failures` (no misses, no false
+stops; these are late stops and end-of-turn errors), plus the one false stop of the loud-start stress copy:
+
 | # | Call | What happened | Why it went wrong |
 |---|---|---|---|
-| 1 | IH04_clean_phone («لا، مو صح») | Miss: stopped 1810 ms after the intent was evident (limit 1500) | The first three decodes were the stock phrase «ترجمة نانسي قنقر»; the cue «لا» was read at 1.8 s. |
-| 2 | IH05_noisy-door_phone («استنى استنى») | Never stopped | «استنى» was heard as «سنة» / «سنة سنة» four times (not a cue), then the stock phrase. |
-| 3 | AM02_clean, AM02_clean_phone («طيب؟») | Never stopped | The rising «طيب؟» was decoded «طيب», an acknowledgement by text; the scorer treats it as ambiguous, so it is as much a labelling issue as a miss. |
-| 4 | BG-D01 (loud-start copy) | False stop on TV speech («على المترجمات لكثير…») | The TV was louder than the caller early on, so it became the caller's reference voice. Text cannot tell a TV presenter from the caller. |
-| 5 | OV-D03 | Stopped 0.8 s after «يا أخي هذا ثالث مرة…» was clear | At 0.6 s Whisper had «يا أخي هذا»: 2 real words, the rule needs 3 or a cue. Accepting 2 false-stopped on TV in replay. |
-| 6 | HT-D02 | Took the turn while the caller dictated («لحظة أشوف» … «ثلاثة سبعة») | End-of-turn track only: such phrases and digit strings look finished. |
-| 7 | live, Nov 17 | «اصبر، اصبر» did not stop the agent | «اصبر» was in no dev call; added with 60 general floor-bid phrases checked against 2,719 logged decodes. |
-| 8 | T4-GI09 («تمام بس الموعد ما يناسبني») | Miss: the STOP came after the 1.5 s limit | «تمام» was heard «تنظر / تنان»; the caller's short pause split the sentence into two bursts, so «بس» was read only in the second one. Joining bursts across pauses was tested and was unstable. |
-| 9 | T4-GI11 («وش يعني بدون رسوم؟») | Miss although the STOP was decided at ~0.8 s | The question is about the agent's last words and starts 0.7 s before the agent finishes: our STOP arrived after the agent had stopped talking, so it counts for nothing. |
-| 10 | T4-GI06 («ليش كذا؟») | Never stopped | Whisper heard «يشكي ده»: the question word was lost, two words left, no cue. |
-| 11 | T4-DV09 («إيش الكلام ده؟ أنا ما طلبت حاجة») | Stopped too late | «إيش» was heard «إيه» (an acknowledgement), so the question did not count; the stop came from the second sentence. |
-| 12 | T4-BG01 (TV news «وفي نشرة اليوم أعلن…») | False stop | Background speech at the caller's own loudness, fluently decoded (confidence −0.16): no text, loudness or confidence rule separates it from the caller. |
+| 1 | GI-D02 | Real interruption; stopped 0.5 s after it was clear (full credit needs 0.3 s) | Latency floor: no decode before the burst is 300 ms long, plus ~280 ms per decode, so the first possible STOP is ~0.55-0.65 s after the caller starts. A 200 ms first decode was tested and scored lower (short clips are misread). |
+| 2 | GI-D03 | «لحظة»; stopped 0.4 s after it was clear | Same floor. In earlier runs the first decode was «لحفظ», a near miss of «لحظة»; loosening the fuzzy match further would also match unrelated words. |
+| 3 | AM-D02 | Ambiguous word; stopped 0.5 s after it was clear | Same floor: the decision needs the words, and the words need one decode. |
+| 4 | OV-D03 | Both started at once; stopped 0.5 s after «يا أخي هذا ثالث مرة…» was clear (0.8 s before Nov 20) | «يا أخي هذا» is 2 real words and the rule needs 3 or a cue. The Nov 20 speculative STOP (2 words as loud as the caller, taken back by RESUME if not confirmed) cut 0.3 s; the rest is the floor. |
+| 5 | HT-D02 | End-of-turn: took the turn three times while the caller dictated or paused («لحظة أشوف» … «ثلاثة سبعة») | Such phrases and digit strings look like finished sentences to our end-of-turn words rule (separate track). |
+| 6 | HT-D01 | End-of-turn: took the turn 0.6 s after the caller finished, at the edge of full credit | After a pause, «يعني تقريبا ساعة سبعة» looks complete; we wait 0.7 s on finished-looking text. Words alone cannot always tell a pause from an end. |
+| 7 | BG-D01 | Loud-start stress copy (`runs/live-final-loudstart`): false stop on TV speech («على المترجمات لكثير…») | The TV was louder than the caller early on, so it became the caller's reference voice; TV speech then looked as loud as the caller. Text cannot tell a TV presenter from the caller. |
+
+Team data and live tests (held-out calls, harsher labels: latency counted from the first syllable):
+
+| # | Call | What happened | Why it went wrong |
+|---|---|---|---|
+| 8 | IH04_clean_phone («لا، مو صح») | Miss: stopped 1810 ms after the intent was evident (limit 1500) | The first three decodes were the stock phrase «ترجمة نانسي قنقر»; the cue «لا» was read at 1.8 s. |
+| 9 | IH05_noisy-door_phone («استنى استنى») | Never stopped | «استنى» was heard as «سنة» / «سنة سنة» four times (not a cue), then the stock phrase. |
+| 10 | AM02_clean, AM02_clean_phone («طيب؟») | Never stopped | The rising «طيب؟» was decoded «طيب», an acknowledgement by text; the scorer treats it as ambiguous, so it is as much a labelling issue as a miss. |
+| 11 | live, Nov 17 | «اصبر، اصبر» did not stop the agent | «اصبر» was in no dev call; added with 60 general floor-bid phrases checked against 2,719 logged decodes. |
+| 12 | T4-GI09 («تمام بس الموعد ما يناسبني») | Miss: the STOP came after the 1.5 s limit | «تمام» was heard «تنظر / تنان»; the caller's short pause split the sentence into two bursts, so «بس» was read only in the second one. Joining bursts across pauses was tested and was unstable. |
+| 13 | T4-GI11 («وش يعني بدون رسوم؟») | Miss although the STOP was decided at ~0.8 s | The question is about the agent's last words and starts 0.7 s before the agent finishes: our STOP arrived after the agent had stopped talking, so it counts for nothing. |
+| 14 | T4-GI06 («ليش كذا؟») | Never stopped | Whisper heard «يشكي ده»: the question word was lost, two words left, no cue. |
+| 15 | T4-DV09 («إيش الكلام ده؟ أنا ما طلبت حاجة») | Stopped too late | «إيش» was heard «إيه» (an acknowledgement), so the question did not count; the stop came from the second sentence. |
+| 16 | T4-BG01 (TV news «وفي نشرة اليوم أعلن…») | False stop | Background speech at the caller's own loudness, fluently decoded (confidence −0.16): no text, loudness or confidence rule separates it from the caller. |
 
 ## 7. Strengths, weaknesses and trade-offs
 
