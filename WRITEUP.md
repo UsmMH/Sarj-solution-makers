@@ -107,6 +107,7 @@ scored 70.1 vs 65.7 on the team calls (before our rule fixes) but 88.8 on dev (a
 | Whisper confidence features | no_speech_prob is exactly 0.0 on everything; avg_logprob points the wrong way (stock phrases are the most confident decodes, AUC 0.07); echo score AUC 0.59 [0.35, 0.80] |
 | Banning stock-phrase tokens | The decoder falls back to «شكرا»: 0 of 4 recovered |
 | ElevenLabs `scribe_v3_live` as the recogniser | Measured offline: first text at 0.75 s (nothing before 0.7 s), same recall as Whisper, slower; used in the demo only |
+| Gemini Live (`gemini-2.5-flash-native-audio-latest`, streaming input transcription) as the recogniser | Same 121 events, streamed in real time: good text and no stock phrases, but first text at 1.82 s median (p10 1.35 s), nothing on 38 of 121 events; 0 of 56 stops caught by 1.0 s (Whisper 25), 16 by 2.0 s (Whisper 46) |
 | Earlier | Prosodic classifier (AUC 0.54), WeSpeaker speaker veto (too little clean speech to enrol), cloud STT (0.83 match in 2.4-3.9 s vs Whisper 0.75 in 0.5 s), cloud LLM judge (2-4 false stops per model), Whisper text prompt, beam-5 retry, 2-word rule, longer lead-in: none helped |
 
 Lesson: with S = 1.00 on every seen set, "replay shows no new false stop" cannot validate a loosening, so we shipped the
@@ -148,6 +149,27 @@ gates (the false stops are confident decodes); an echo-aware floor (none of our 
 channel, so it could not be tested). A rule ablation found no rule group that helps on dev alone; the 3-word rule and
 the −6 dB line help dev most and are the closest to dev-fitted (`analysis/REPORT_nov20.md`).
 
+## 5d. Robustness: 8 versions of the 24 dev calls, scored on calls we never inspected
+
+To see past the dev score with the 24 provided calls only, we fixed a protocol before any result: the 8 `*-D01` calls
+are the only ones whose logs we read ("inspect"); the 16 `*-D02/D03` calls are only scored ("check"). Each call was also
+played in 7 label-safe copies where only the caller channel changes (`augment.py`, textbook parameters, not tuned):
+quieter line (−12 dB), loud start, a click, telephone band 300–3400 Hz + G.711 mu-law, steady pink noise at 15 dB SNR,
+car-like brown noise at 5 dB SNR, room echo (RT60 0.5 s). Both engines ran the same rules, live (`eval_sets.py`):
+
+| Check fold, 16 calls (Core) | dev | vol −12 | loud start | click | phone | pink noise | brown noise | room echo | **mean** |
+|---|---|---|---|---|---|---|---|---|---|
+| Whisper (submitted) | 92.9 | 91.1 | 89.6 | 92.9 | 89.0 | 88.4 | 93.5 | 81.3 | **89.8** |
+| ElevenLabs live (experiment) | 88.9 | 89.8 | 89.3 | 89.1 | 88.4 | 85.3 | 87.6 | 90.2 | **88.6** |
+
+Neither engine missed an interruption on the check fold in any version; the differences are stop speed (Whisper is
+faster on clean audio: p90 ~0.5 s vs ~0.85 s) and one false stop each on the phone copy. Room echo is the submitted
+system's weakest condition: stops slow to a p90 of 1.3 s (R 0.72), while ElevenLabs keeps 0.78 s. On the inspect fold
+the submitted system loses one interruption each with phone audio and with noise (1 of 8 calls = −30 points there): noisy
+phone lines remain the main risk for unseen calls, in line with the checkpoint (77.0). The ElevenLabs version
+(`my_system_eleven.py`) is not submitted: it is cloud-dependent and 1.2 points lower on average (within the ±2 run-to-run
+spread).
+
 ## 6. Where it fails
 
 Dev set (24 calls), final system, from `python -m ttbench.summary runs/live-final-dev --failures` (no misses, no false
@@ -182,7 +204,7 @@ Team data and live tests (held-out calls, harsher labels: latency counted from t
 **Strong:** backchannels, coughs, laughter and echo; clear Gulf cues («لا لا», «لحظة», «اسمع», «بس», «اصبر») within
 ~0.2–0.5 s; quiet or loud callers; fully local. **Weak:** speech from a TV or person as loud as the caller; ambiguous
 words whose meaning is in the tone («خلاص», «طيب»); interruptions without a cue word need 3 real words; noisy phone
-lines; end of turn during dictation. **Trade-off:** we prefer missing speed over a false stop (it zeroes a KEEP event).
+lines; room echo (stops slow to ~1.3 s, section 5d); end of turn during dictation. **Trade-off:** we prefer missing speed over a false stop (it zeroes a KEEP event).
 We chose the 3-word rule and the −6 dB line partly by looking at dev; the −12 dB line has a 10 dB margin.
 
 **With another week:**
@@ -200,6 +222,7 @@ websockets, NVIDIA cuBLAS / cuDNN 12. No network call, no other model.
 | Model | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | **scored system** (local, GPU) |
 | Model | Silero VAD (`silero_vad_v6.onnx`, bundled in faster-whisper, CPU) | offline analysis and one unshipped experiment; NOT in the scored system |
 | Model | `Systran/faster-whisper-small`; `oddadmix/whisper-large-v3-turbo-arabic-dialectal-v2` (Apache 2.0, CTranslate2) | early probes / tested alternative, not in the scored system |
+| API | Google AI Studio Gemini Live: `gemini-2.5-flash-native-audio-latest` (streaming transcription timing test) | experiment only, not in the scored system |
 | API | ElevenLabs: `scribe_v3_live`, `scribe_v1` (speech-to-text); `eleven_v4_turbo`, `eleven_flash_v2_5` (text-to-speech; voices Sarah, Chris, Saudi Voice Library) | demo/experiment only, not in the scored system |
 | API | Munsit (CNTXT AI): `faseeh-v1-preview` text-to-speech; `audio/transcribe` speech-to-text (comparison only) | demo/experiment only, not in the scored system |
 | API | OpenRouter: `anthropic/claude-haiku-5.5` (demo reply writer; LLM judge experiment), `google/gemini-2.5-flash-lite`, `google/gemini-2.5-flash`, `google/gemini-3.7-flash`, `openai/gpt-audio-mini` (fallback voice), `meta-llama/llama-3.3-70b-instruct`, `openai/gpt-4.1-mini`, `qwen/qwen3.8-omni-flash`, `mistralai/voxtral-small-24b-2507` | demo/experiment only, not in the scored system |
