@@ -111,7 +111,6 @@ there were no new false stops (also on team data and a polite-«لا» set):
 | ElevenLabs `scribe_v3_live` *instead of* Whisper | best text accuracy (0.90 vs 0.86) but first text ~0.75 s: 88.6 vs 89.8; much better in echo (90.2 vs 81.3), which led to the rescue |
 | Hedged STOP at 200-300 ms on any loud sound, RESUME if it is an acknowledgement | S fell to 0.73-0.80: every loud KEEP burst became a half-credit hiccup |
 | Dialect-tuned Whisper (`oddadmix/...-arabic-dialectal-v2`) | +4 on team calls, but dev 88.8: a TV false stop, «لحظة» heard «لحفة» |
-| Gemini Live as the recogniser | first text 1.82 s median; 0 of 56 stops by 1.0 s (Whisper 25) |
 | Speaker-embedding veto, pitch/voicing classifier, LLM judge, confidence gates | enrolment too short; AUC 0.54; 2-4 false stops per model; false stops are confident decodes |
 
 ## 6. Where it fails
@@ -135,36 +134,32 @@ Unseen data (team calls, live tests):
 | 8 | AM02 («طيب؟») | Never stopped | The rising tone is lost in text; «طيب» reads as an acknowledgement. |
 | 9 | live, Nov 17 | «اصبر، اصبر» did not stop the agent | «اصبر» was in no dev call; added with 60 general Gulf phrases, 0 new false stops on 2,719 logged decodes. |
 | 10 | T4-BG01 (TV news) | False stop | Background speech at the caller's own loudness, decoded fluently: no text or loudness rule separates it. |
-| 11 | Polite «لا لا إن شاء الله» ("not at all") | False stop on all 3 polite calls (S 0.67) | Whisper hears «لا لا» ~0.7 s in; «إن شاء الله» arrives ~1.4 s, too late for a RESUME. Waiting for it made real «لا» stops 0.3–0.6 s late (team data 71.0 → 66.4), so we keep the stop. |
+| 11 | Polite «لا لا إن شاء الله» ("not at all") | False stop on all 3 polite calls (S 0.67) | Whisper reads «لا لا» first, about 0.7 s in; the polite ending arrives about 1.4 s in, too late to take the stop back. Waiting for it made real stops late (team data 71.0 → 66.4), so we keep the stop. |
 
 ## 7. Strengths, weaknesses and trade-offs
 
 **Strong:** backchannels, coughs, laughter and echo; clear Gulf cues within ~0.2–0.5 s; quiet or loud callers; works
-without internet (rescue off). **Weak:** a TV or person as loud as the caller; words whose meaning is in the tone
-(«خلاص», «طيب»); interruptions without a cue need 3 real words; noisy phone lines; end of turn during dictation. The
-rescue needs internet at the venue, and a TV saying «لحظة» could still stop us.
+without internet (rescue off). **Weak:** a TV or person as loud as the caller (even one saying «لحظة»); words whose meaning is in the tone
+(«خلاص», «طيب»); interruptions without a cue need 3 real words; noisy phone lines; end of turn during dictation.
 **Trade-off:** we prefer a late stop over a false stop (a false stop zeroes a KEEP event). The 3-word rule and the −6 dB
 line were partly chosen while looking at dev; the −12 dB line has a 10 dB margin.
 
-**With another week:** a fast keyword spotter for the first 300 ms (latency and first-decode errors are the biggest
-remaining loss); a question-context gate (the agent just asked «؟»), which needs more answer-to-question data.
+**What we can add next:** a fast keyword spotter for the first 300 ms (latency and first-decode errors are the biggest
+remaining loss); a question-context gate (the agent just asked «؟»).
 
 ## 8. External services, models and data
 
-**Scored system:** faster-whisper large-v3-turbo (CTranslate2, float16, local GPU), NumPy, websockets, NVIDIA cuBLAS /
-cuDNN 12, and **ElevenLabs `scribe_v3_live`** (cloud, caller audio only, rescue STOPs; counts in our latency).
+**Scored system:** the two rows marked below, plus NumPy, websockets and NVIDIA cuBLAS / cuDNN 12.
 
 | Kind | Name | Status |
 |---|---|---|
 | Model | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | **scored system** (local, GPU) |
 | API | ElevenLabs `scribe_v3_live` (speech-to-text, streamed) | **scored system** (rescue STOPs) and demo |
-| Model | `Systran/faster-whisper-small`; `oddadmix/whisper-large-v3-turbo-arabic-dialectal-v2`; Silero VAD | tested / analysis only |
-| API | ElevenLabs `scribe_v1`, `eleven_v4_turbo`, `eleven_flash_v2_5`; Munsit `faseeh-v1-preview` | demo and experiments only |
-| API | Google Gemini Live `gemini-2.5-flash-native-audio-latest` | experiment only |
-| API | OpenRouter: `anthropic/claude-haiku-5.5`, `google/gemini-2.5-flash(-lite)`, `google/gemini-3.7-flash`, `openai/gpt-audio-mini`, `openai/gpt-4.1-mini`, `meta-llama/llama-3.3-70b-instruct`, `qwen/qwen3.8-omni-flash`, `mistralai/voxtral-small-24b-2507` | demo and experiments only |
-| Tool | `edge-tts` (rejected demo voice); Cloudflare `cloudflared` (practice checkpoint only) | not in the scored system |
-| Data | Sarj development set (24 calls) and our label-safe copies | development and robustness tests |
 | Data | Our team's generated calls (58 + 38; ElevenLabs agent voices, recorded caller lines) | held-out tests only; no private or customer data |
+
+Tried, never in the scored system (demo and experiments only): Whisper small, a dialect Whisper (oddadmix), Silero
+VAD; ElevenLabs scribe_v1 and TTS (v4 Turbo, Flash v2.5); Munsit faseeh-v1; Gemini Live; via OpenRouter: Claude Haiku
+5.5, Gemini 2.5/3.7 Flash, GPT-audio-mini, GPT-4.1 mini, Llama 3.3 70B, Qwen 3.8 omni, Voxtral small; edge-tts.
 
 ## 9. Team
 
