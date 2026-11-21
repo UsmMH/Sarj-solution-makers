@@ -78,6 +78,20 @@
   .status.stopped { border-color: var(--stop); background: var(--stop-soft); } .status.stopped .dot { background: var(--stop); }
   .status.thinking { border-color: var(--warn); background: var(--warn-soft); } .status.thinking .dot { background: var(--warn); animation: pulse .7s infinite; }
   @keyframes pulse { 50% { transform: scale(1.5); opacity: .55; } }
+  /* Nov 21: light motion (all off under prefers-reduced-motion, rule below) */
+  .status { transition: background .25s, border-color .25s; }
+  .status.stopped { animation: stopHit .45s ease-out; }
+  @keyframes stopHit { 0% { transform: scale(1); } 30% { transform: scale(1.06); box-shadow: 0 0 0 6px var(--stop-soft); } 100% { transform: scale(1); } }
+  .msg.agent { animation: inLeft .28s ease-out both; }
+  .msg.you { animation: inRight .28s ease-out both; }
+  .msg.you.live { animation: inRight .28s ease-out both, breathe 1.4s ease-in-out .3s infinite; }
+  .msg.cut { animation: cutFlash .5s ease-out; }
+  .event, .badge { animation: popIn .25s ease-out both; }
+  @keyframes inLeft { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+  @keyframes inRight { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+  @keyframes popIn { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+  @keyframes breathe { 50% { border-color: transparent; } }
+  @keyframes cutFlash { 0% { box-shadow: inset 0 0 0 1.5px var(--stop), 0 0 0 0 var(--stop-soft); } 40% { box-shadow: inset 0 0 0 1.5px var(--stop), 0 0 0 8px var(--stop-soft); } 100% { box-shadow: inset 0 0 0 1.5px var(--stop), 0 0 0 0 transparent; } }
   .now .label { font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
   .sentence { font: 500 22px/1.7 var(--font-ar); direction: rtl; text-align: right; min-height: 1.7em; }
   .progress { height: 3px; background: var(--meter); border-radius: 2px; margin-top: 8px; overflow: hidden; }
@@ -275,8 +289,8 @@
       <div class="fields">
         <label class="f">Mode
           <select id="mode">
+            <option value="dev" selected>Recorded call (dev agent sentences)</option>
             <option value="free">Free conversation (LLM agent, Arabic voice)</option>
-            <option value="dev">Recorded call (dev agent sentences)</option>
           </select></label>
         <label class="f">How you listen
           <select id="audio">
@@ -441,7 +455,26 @@ function stopPieces() {
   return lastStop ? [`STOP · ${lastStop.reason.replace(/«.*»/, "").trim()} `, ...(lastStop.cue ? [{ar: lastStop.cue}] : []),
                      " · heard ", {ar: lastStop.heard}] : ["STOP · you took the floor"];
 }
-function startAgentBubble(text) { agentBubble = bubble("agent", text || "…"); }
+function startAgentBubble(text) { if (!free) endCallerBubble(); agentBubble = bubble("agent", text || "…"); }
+// Recorded-call mode: the caller's words come from Whisper's own decodes (free, nothing extra is sent anywhere).
+const NOT_WORDS = /stock phrase|echo|nothing heard|far quieter/, STOCK_AR = /ترجمة|نانسي|اشترك|المشاهد/;
+function endCallerBubble() {
+  if (liveBubble) { liveBubble.classList.remove("live"); addBadge(liveBubble, "Whisper"); }
+  liveBubble = null; $("livetext").textContent = "";
+}
+function callerWords(kind, text, reason, line) {
+  const skip = !text.trim() || NOT_WORDS.test(reason) || STOCK_AR.test(text);
+  if (kind === "asr") {
+    const burst = (line.match(/burst (\d+)/) || [])[1];
+    if (burst !== callerWords.burst) { endCallerBubble(); callerWords.burst = burst; }
+    if (!skip) onLivePartial(text);
+  } else if (!skip && liveBubble) {                     // end of turn: keep the longer of the two readings
+    const cur = liveBubble.querySelector(".txt").textContent;   // (the end check only hears audio after the agent stopped)
+    if (text.length > cur.length && !cur.includes(text)) setText(liveBubble, text);
+    endCallerBubble();
+  } else if (!skip) onCallerTurn(text, "Whisper");
+  else endCallerBubble();
+}
 function onLivePartial(text) {
   $("livetext").textContent = text ? "أنت: " + text : "";
   if (!text) return;
@@ -543,6 +576,7 @@ function onLog(line, shadow) {
   const why = [shadow ? `ours would: ${decision}` : decision, m[6]];
   if (vs) why.push(vs[1] === "n/a" ? "no reference voice yet" : `${vs[1]} dB vs your voice`);
   addRow(kind, m[4], why, decision === "STOP" && !shadow ? "stop" : "");
+  if (!shadow && !free && inCall) callerWords(m[1], m[4], m[6], line);
   if (!shadow && m[1] === "asr" && decision === "STOP")
     lastStop = {reason: m[6], cue: (m[6].match(/«(.*)»/) || [])[1] || "", heard: m[4]};
   // a backchannel or noise while the agent talks, correctly ignored (counted once per burst)
@@ -789,7 +823,7 @@ async function startCall() {
   inCall = true; t0 = performance.now(); counts = {stop: 0, take: 0, dec: 0}; kept = 0;
   ["nstop", "ntake", "ndec", "kStops", "kKept"].forEach(id => $(id).textContent = "0");
   $("kReply").textContent = "–";
-  $("chat").innerHTML = ""; agentBubble = liveBubble = null; levels = []; markers = []; agentSegs = [];
+  $("chat").innerHTML = ""; agentBubble = liveBubble = null; levels = []; markers = []; agentSegs = []; callerWords.burst = null;
   $("start").disabled = true; $("hang").disabled = false; $("settings").open = false;
   for (const id of ["call", "mode", "audio", "stt", "writer", "voice", "scenario"]) $(id).disabled = true;
   if (free) {
