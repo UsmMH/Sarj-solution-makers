@@ -659,5 +659,11 @@ class MySystem(System):
 
 
 if __name__ == "__main__":
-    ASR.load()                                                 # heavy: before the server starts
-    run(MySystem, TEAM, __file__)
+    # Nov 21 final round: the organisers start `python my_system.py`, so this runs the SUBMITTED system
+    # (my_system_hybrid_cue.py = this Whisper system + the cue-only ElevenLabs rescue). $env:SYSTEM="whisper" = this file alone.
+    if os.environ.get("SYSTEM", "").lower() == "whisper":
+        ASR.load()                                             # heavy: before the server starts
+        run(MySystem, TEAM, __file__)
+    else:
+        import my_system_hybrid_cue
+        my_system_hybrid_cue.main()

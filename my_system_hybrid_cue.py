@@ -75,7 +75,8 @@ class MySystem(H.MySystem):
         self._log(line)
 
 
-if __name__ == "__main__":
+def main():
+    """Start the submitted system (also what `python my_system.py` runs since Nov 21 afternoon)."""
     M.ASR.load()
     import time
     H.EL.ensure_started()
@@ -86,3 +87,7 @@ if __name__ == "__main__":
     if not H.EL.ok:
         M.loud_warning("ElevenLabs NOT connected: running as the plain Whisper system until it connects", [])
     M.run(MySystem, TEAM, __file__)
+
+
+if __name__ == "__main__":
+    main()
