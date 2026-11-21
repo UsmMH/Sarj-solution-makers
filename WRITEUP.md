@@ -38,7 +38,8 @@ caller audio, 20 ms frames (agent TEXT used for echo detection)
  │     keep:  nothing heard · stock phrases · echo of the agent · side talk («يمه», «يا محمد…» unless the agent said
  │            that name) · burst >12 dB quieter than the caller
  │     STOP:  cue word (لحظة، استنى، اسمع، بس، اصبر، «لا» at the start…) or one of 60 phrases
- │     STOP:  a question, or 3+ real words, unless more than 6 dB quieter than the caller's voice
+ │     STOP:  a question (one word only if Whisper marks «؟» and it is as loud as the caller), or 3+ real words,
+ │            unless more than 6 dB quieter than the caller's voice
  │     STOP?: 2 real words at the caller's own loudness = speculative STOP; RESUME if not confirmed within 450 ms
  │     STOP:  "default stop": 1 s of speech as loud as the caller's own voice with any non-backchannel word
  ├─ rescue: ElevenLabs live text of the same burst → same decide(); may STOP only on a stop cue/phrase, and only if

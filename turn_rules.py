@@ -77,6 +77,8 @@ QUESTION_WORDS = _words("كم شنو وش ايش ليش ليه وين متى ش�
                         # Nov 20: dialect question words (Hijazi امتى/ايمتى/فين, Kuwaiti/Bahraini منو/شكثر/اشلون,
                         # general بكم "how much", وشلون/وشو Najdi)
                         " امتى ايمتى فين منو شكثر شقد بكم اشلون وشلون وشو")
+LONE_QUESTION = _words("وش واش ايش اش شنو وشو ها هاه نعم ليش ليه كيف وين متى مين")
+LONE_QUESTION_REL_DB = -3.0
 SIDE_TALK = _words("يمه يما ماما بابا يابه اسكت اسكتي")          # talking to someone in the room
 SIDE_TALK_PHRASE = re.compile(r"(?:^| )يا (?:ولد|ولدي|بنت)(?: |$)")
 # Nov 21 (analysis/PREREG_vocative_nov21.md): «يا» + a given name = calling someone in the room («يا محمد جيب الشاي»),
@@ -253,6 +255,12 @@ def decide(text: str, agent_text: str = "", peak_db=None, ref_db=None):
         quiet = peak_db < WEAK_EVIDENCE_MIN_DB
     if len(toks) >= 2 and any(t in QUESTION_WORDS for t in toks):
         return (False, "question, but quiet") if quiet else (True, "question")
+    # Nov 21 (analysis/PREREG_fix_nov21.md): a lone question word that Whisper marked «؟» («وش؟», «نعم؟», «ها؟»), as loud
+    # as the caller's own voice (the -3 dB line of the speculative and default stops). A lone word without «؟», or a
+    # quieter one, stays "too little to tell" (Whisper invents «شنو» on noise).
+    if (len(toks) == 1 and toks[0] in LONE_QUESTION and "؟" in text and peak_db is not None and ref_db is not None
+            and peak_db - ref_db >= LONE_QUESTION_REL_DB):
+        return True, f"lone question «{toks[0]}»"
     content = list(dict.fromkeys(t for t in toks if t not in NEUTRAL and not is_ack(t)))   # distinct words
     if len(content) >= MIN_CONTENT_WORDS:
         if quiet:
