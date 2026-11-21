@@ -79,6 +79,29 @@ QUESTION_WORDS = _words("كم شنو وش ايش ليش ليه وين متى ش�
                         " امتى ايمتى فين منو شكثر شقد بكم اشلون وشلون وشو")
 SIDE_TALK = _words("يمه يما ماما بابا يابه اسكت اسكتي")          # talking to someone in the room
 SIDE_TALK_PHRASE = re.compile(r"(?:^| )يا (?:ولد|ولدي|بنت)(?: |$)")
+# Nov 21 (analysis/PREREG_vocative_nov21.md): «يا» + a given name = calling someone in the room («يا محمد جيب الشاي»),
+# unless the agent said that name in this call (every call opens «معك ريم … معي الأستاذ عمر؟»: «يا ريم» is to the agent).
+# No «علي» (= «على» once normalised) or «أمل» ("hope"). Titles («يا مدير», «يا أستاذ», «يا أخي») are not names: they can
+# address the agent.
+GIVEN_NAMES = None                 # filled below, after normalize() exists
+_VOCATIVE = re.compile(r"(?:^| )يا+ (\S+)")
+_CALL_NAMES = set()                # names the agent said in this call (my_system resets it per call)
+
+
+def call_reset():
+    _CALL_NAMES.clear()
+
+
+def call_agent_said(text: str):
+    _CALL_NAMES.update(t for t in tokens(text) if t in GIVEN_NAMES)
+
+
+def vocative_name(norm: str):
+    """The given name a caller calls out to someone in the room, or None."""
+    for m in _VOCATIVE.finditer(norm):
+        if m.group(1) in GIVEN_NAMES and m.group(1) not in _CALL_NAMES:
+            return m.group(1)
+    return None
 ACKS = _words("""
     ايه ايوه ايوا ايو اي ايها اها اه اوه ام امم مم م هم همم هيه هي ها هاه
     اوكي اوك اوكيه تمام زين ماشي طيب خلاص حلو كويس ممتاز مميز مميزة رائع جيد
@@ -100,6 +123,13 @@ def tokens(text: str) -> list:
     for t in normalize(text).split():
         out += ["لا"] * (len(t) // 2) if re.fullmatch(r"(?:لا)+", t) else [t]     # «لالا» -> لا لا
     return out
+
+
+GIVEN_NAMES = frozenset(normalize(n) for n in """
+    محمد أحمد عبدالله عبدالرحمن عبدالعزيز عبدالمجيد عبدالكريم خالد فهد سعود سلطان فيصل تركي ناصر سعد عمر يوسف إبراهيم
+    ماجد بندر نايف مشعل مساعد حمد راشد سالم صالح منصور ياسر وليد طلال زياد مازن ريان نواف بدر عادل حسن حسين مصطفى حمود
+    متعب عبدالرحيم سامي هاني نورة سارة فاطمة مريم ريم هند لولوة منيرة هيا العنود الجوهرة دانة رهف لمى شهد نوف أسماء
+    عائشة خلود منى ابتسام لطيفة غادة سلمى جود""".split())
 
 
 def _close(a: str, b: str) -> bool:
@@ -212,6 +242,9 @@ def decide(text: str, agent_text: str = "", peak_db=None, ref_db=None):
         phrase = None                                          # «مو غلط» = "not wrong", agreement
     if phrase:
         return True, f"phrase «{phrase.group(1)}»"
+    name = vocative_name(norm)
+    if name:
+        return False, "talking to someone else in the room"
     if peak_db is None:
         quiet = False
     elif ref_db is not None:

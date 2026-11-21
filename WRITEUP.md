@@ -35,7 +35,8 @@ caller audio, 20 ms frames (agent TEXT used for echo detection)
  ├─ adaptive noise floor (20th percentile of last 3 s + 10 dB) ── burst of caller sound while the agent talks?
  ├─ Whisper worker thread (never blocks the 20 ms loop): burst + 400 ms lead-in, first decode at 300 ms, then ~every 100 ms
  ├─ decide(text, last 3 agent sentences, burst peak, caller reference voice):
- │     keep:  nothing heard · stock phrases · echo of the agent · side talk · burst >12 dB quieter than the caller
+ │     keep:  nothing heard · stock phrases · echo of the agent · side talk («يمه», «يا محمد…» unless the agent said
+ │            that name) · burst >12 dB quieter than the caller
  │     STOP:  cue word (لحظة، استنى، اسمع، بس، اصبر، «لا» at the start…) or one of 60 phrases
  │     STOP:  a question, or 3+ real words, unless more than 6 dB quieter than the caller's voice
  │     STOP?: 2 real words at the caller's own loudness = speculative STOP; RESUME if not confirmed within 450 ms

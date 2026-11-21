@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 
-from turn_rules import decide, eot_incomplete
+from turn_rules import call_agent_said, call_reset, decide, eot_incomplete
 from ttbench.server import System, run
 
 try:                                        # Arabic in log lines must never crash a thread on Windows
@@ -284,12 +284,14 @@ class MySystem(System):
         self.agent_hist = []
         self._ref_db = NO_PEAK                                   # new caller, new line: no reference voice yet
         self._ref_win.clear()
+        call_reset()                                             # names the agent says in this call
         self._log(f"--- scenario {context!r}"[:200])
         self._reset_burst()
 
     def on_agent_start(self, text, duration_ms):
         self.agent_talking, self.agent_text, self.stopped = True, text, False
         self.agent_hist = (self.agent_hist + [text])[-AGENT_HISTORY:]
+        call_agent_said(text)
         self.sound_ms, self.gap, self.burst_peak = 0, 0, NO_PEAK
         self._reset_burst()
 
