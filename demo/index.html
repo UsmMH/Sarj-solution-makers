@@ -230,6 +230,7 @@
       <div class="nowhead">
         <div class="label" id="uttlabel">agent</div>
         <label class="quick free-only"><span>Scenario</span><select id="preset" aria-label="Ready-made scenario"></select></label>
+        <label class="quick dev-only"><span>Call</span><select id="callQuick" aria-label="Recorded call"></select></label>
       </div>
       <div class="sentence" id="sentence">—</div>
       <div class="progress"><div id="prog"></div></div>
@@ -825,7 +826,7 @@ async function startCall() {
   $("kReply").textContent = "–";
   $("chat").innerHTML = ""; agentBubble = liveBubble = null; levels = []; markers = []; agentSegs = []; callerWords.burst = null;
   $("start").disabled = true; $("hang").disabled = false; $("settings").open = false;
-  for (const id of ["call", "mode", "audio", "stt", "writer", "voice", "scenario"]) $(id).disabled = true;
+  for (const id of ["call", "callQuick", "mode", "audio", "stt", "writer", "voice", "scenario"]) $(id).disabled = true;
   if (free) {
     ws.send(JSON.stringify({type: "chat_start", audio: $("audio").value, scenario: $("scenario").value, voice: $("voice").value, stt: $("stt").value,
                             writer: $("writer").value}));
@@ -847,7 +848,7 @@ function endCall(reason) {
   }
   agentOff(); stopStream();
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: "call_end"}));
-  for (const id of ["call", "mode", "audio", "stt", "writer", "voice", "scenario"]) $(id).disabled = false;
+  for (const id of ["call", "callQuick", "mode", "audio", "stt", "writer", "voice", "scenario"]) $(id).disabled = false;
   setState("idle"); $("sentence").textContent = "—"; $("livetext").textContent = "";
   $("start").disabled = false; $("hang").disabled = true;
   chatEvent("call ended" + (reason ? ": " + reason : ""));
@@ -868,6 +869,8 @@ $("clear").onclick = () => $("log").innerHTML = "";
 fetch("/calls").then(r => r.json()).then(list => {
   calls = list;
   $("call").innerHTML = list.map(c => `<option value="${c.id}">${c.id} · ${c.use_case} (${c.utterances.length} sentences)</option>`).join("");
+  $("callQuick").innerHTML = $("call").innerHTML;            // same list in the top bar; the two pickers stay in sync
+  $("callQuick").value = $("call").value;
 });
 function showMode() {
   const f = $("mode").value === "free";
@@ -875,6 +878,8 @@ function showMode() {
   document.querySelectorAll(".dev-only").forEach(el => el.style.display = f ? "none" : "");
 }
 $("mode").onchange = showMode; showMode();
+$("callQuick").onchange = () => { $("call").value = $("callQuick").value; };
+$("call").onchange = () => { $("callQuick").value = $("call").value; };
 $("audio").onchange = () => { if (ctx && !inCall) openMic($("audio").value).catch(e => addRow("error", "", String(e))); };
 loadVoices(); speechSynthesis.onvoiceschanged = loadVoices;
 connect(); tick();
