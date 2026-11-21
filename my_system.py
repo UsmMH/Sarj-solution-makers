@@ -285,6 +285,7 @@ class MySystem(System):
         self._ref_db = NO_PEAK                                   # new caller, new line: no reference voice yet
         self._ref_win.clear()
         call_reset()                                             # names the agent says in this call
+        self.__dict__.get("_side_bursts", set()).clear()
         self._log(f"--- scenario {context!r}"[:200])
         self._reset_burst()
 
@@ -610,6 +611,13 @@ class MySystem(System):
             print(f"[asr] decode failed ({ex!r}); {self._fails} in a row", flush=True)
             return None
         stop, why = decide(text, agent_text, peak_db=float(pk), ref_db=ref)
+        # Nov 21 (analysis/PREREG_sidemem_nov21.md): once a burst was judged side talk («ماما», «يا محمد»), its later
+        # "too little to tell" readings stay keep, so the default / speculative stop cannot fire on «ماما… موسيقى».
+        side = self.__dict__.setdefault("_side_bursts", set())
+        if why == "talking to someone else in the room":
+            side.add((epoch, burst_id))
+        elif not stop and why == "acknowledgement or too little to tell" and (epoch, burst_id) in side:
+            why = "side talk earlier in this burst"
         burst_ms = (end - start) * 1000 // SR
         if (DEFAULT_STOP and not stop and why == "acknowledgement or too little to tell" and ref is not None
                 and pk - ref >= DS_REL_DB and burst_ms >= DS_MIN_MS):
