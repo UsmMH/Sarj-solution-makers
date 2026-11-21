@@ -9,12 +9,11 @@ An adaptive energy detector notices caller sound while the agent talks. A local 
 GPU) re-reads that burst every ~300 ms, and Arabic rules decide: a floor bid («لحظة», «لا لا», «اصبر», «ماني فاهم», a
 question, a real sentence) means STOP; a backchannel («إيه», «تمام»), an echo of the agent, side talk, TV or noise means
 keep talking. Loudness is judged *relative to this caller*, so a soft speaker is not mistaken for background noise.
-A second, cloud recogniser (ElevenLabs live) listens in parallel and may only *add* a STOP, only on a stop cue,
-where Whisper heard nothing useful ("rescue").
+A second, cloud recogniser (ElevenLabs live) listens in parallel and may only *add* a STOP, only on a stop cue, where
+Whisper heard nothing useful ("rescue").
 
-**Scored code** (`my_system_hybrid_cue.py` = `my_system.py` + cue-only rescue, `turn_rules.py`): the Nov 20 changes (speculative
-STOP + RESUME, dialect cues, slow-decode watchdog), the Nov 21 "default stop" and the cue-only ElevenLabs rescue (section 5),
-each measured before it was adopted. Run: `python my_system_hybrid_cue.py`.
+**Scored code:** `my_system_hybrid_cue.py` (= `my_system.py` + cue-only rescue) and `turn_rules.py`. Every change was
+measured before it was adopted (section 5). Run: `python my_system_hybrid_cue.py`.
 
 ## 2. Why this approach
 
@@ -59,130 +58,95 @@ judged, reset per call. A live browser demo (`demo.py`) runs the same system on 
 | Stop latency, dev (real time) | median 325 ms after the intent was evident, p90 514 ms (Whisper alone 476 / 525) |
 | Where the time goes | 300 ms of burst before the first decode + ~280 ms decode + up to 100 ms for the next slot |
 | Hardware | RTX 3060 Laptop GPU (6 GB), ~2.4 GB used, mains power (battery: decodes ~35 % slower); ~809 M parameters |
-| Cloud calls and cost | ElevenLabs `scribe_v3_live`, caller channel streamed (~165 credits per 10 min of audio); its text reaches the rules ~0.7 s after speech, so it only adds stops Whisper missed, never makes ours faster |
+| Cloud | ElevenLabs `scribe_v3_live`, caller channel only; its text arrives ~0.7 s after speech, so it only adds missed stops |
 
 ## 5. Results
 
 | Set (live, real time) | Core | R | S |
 |---|---|---|---|
-| Dev, 24 calls | 97.5 (Whisper alone 97.3) | 0.95 | 1.00 |
+| Dev, 24 calls | 98.1 (Whisper alone 97.3) | 0.96 | 1.00 |
 | Organisers' checkpoint, 16 new calls (earlier code, Nov 19) | 77.0 | 0.63 | 0.92 |
-| Team data, locked test split, 11 calls, run once | 74.7 (was 72.2) | 0.60 | 1.00 |
-| Team data, train 44 / validation 11 calls | 64.2 / 65.0 | 0.49 / 0.45 | 0.92 / 1.00 |
+| Team data, locked test split, 11 calls, run once (Nov 20 code) | 74.7 (was 72.2) | 0.60 | 1.00 |
+| Team data, train 44 / validation 11 calls | 65.0 / 65.4 | 0.51 / 0.46 | 0.90 / 1.00 |
 
 Baseline B1: 41.0. Team calls (other voices and scripts, phone and noise versions) have no "intent is clear" time, so
-latency counts from the first syllable: harsher than the real scorer. Live runs vary by about ±2 points.
+latency counts from the first syllable: harsher than the real scorer. Live runs vary by about ±1–2 points. The
+checkpoint caught 5 of 7 interruptions (Wilson 95% CI [0.36, 0.92]): small samples swing a lot.
 
-**Why dev and unseen differ.** Dev was read while the rules were written, so ~95 is optimistic. The checkpoint caught 5
-of 7 interruptions: Wilson 95% CI [0.36, 0.92], so small samples swing a lot. A latency floor (first decode 550-670 ms
-after onset) makes full credit rare. Restraint is the strong side: 0 of 44 KEEP events failed on dev + team data.
-
-**Robustness on the 24 dev calls only, without fitting them.** A protocol fixed before any result: only the 8 `*-D01`
-calls may be inspected; the 16 `*-D02/D03` calls are only scored ("check fold"). Each call is also played in 7 label-safe
-copies where only the caller channel changes, with textbook parameters (`augment.py`): −12 dB line, loud start, a click,
-telephone band 300–3400 Hz + G.711, pink noise at 15 dB SNR, car-like brown noise at 5 dB SNR, room echo RT60 0.5 s.
+**Robustness without fitting the dev calls.** A protocol fixed before any result: only the 8 `*-D01` calls may be
+inspected; the 16 `*-D02/D03` calls are only scored ("check fold"). Each call is also played in 7 label-safe copies
+where only the caller channel changes (`augment.py`): −12 dB line, loud start, a click, telephone band 300–3400 Hz +
+G.711, pink noise at 15 dB SNR, car-like brown noise at 5 dB SNR, room echo RT60 0.5 s.
 
 | Check fold, 16 calls (Core) | dev | −12 dB | loud start | click | phone | pink | brown | echo | **mean** |
 |---|---|---|---|---|---|---|---|---|---|
-| Whisper, Nov 20 rules (live) | 92.9 | 91.1 | 89.6 | 92.9 | 89.0 | 88.4 | 93.5 | 81.3 | **89.8** |
-| Whisper + default stop, simulated | 96.8 | 94.4 | 89.9 | 96.8 | 91.5 | 92.5 | 94.4 | 87.2 | **93.0** |
-| Whisper + default stop (live) | 96.2 | 94.6 | 89.7 | 95.5 | 93.2 | 93.7 | 93.6 | 85.2 | **92.7** |
-| + ElevenLabs rescue (live, 2 runs) | 96.9 | 95.5 | 92.8 | 97.0 | 94.2 | 93.8 | 94.9 | 90.3 | **94.4** |
-| **+ rescue on cues only (submitted, live)** | 97.5 | 96.3 | 93.0 | 97.4 | 93.8 | 97.0 | 95.0 | 90.5 | **95.1** |
-| ElevenLabs live (experiment) | 88.9 | 89.8 | 89.3 | 89.1 | 88.4 | 85.3 | 87.6 | 90.2 | **88.6** |
+| Whisper, Nov 20 rules | 92.9 | 91.1 | 89.6 | 92.9 | 89.0 | 88.4 | 93.5 | 81.3 | **89.8** |
+| + default stop | 96.2 | 94.6 | 89.7 | 95.5 | 93.2 | 93.7 | 93.6 | 85.2 | **92.7** |
+| + ElevenLabs rescue (2 runs) | 96.9 | 95.5 | 92.8 | 97.0 | 94.2 | 93.8 | 94.9 | 90.3 | **94.4** |
+| **+ rescue on cues only (submitted)** | 97.5 | 96.3 | 93.0 | 97.4 | 93.8 | 97.0 | 95.0 | 90.5 | **95.1** |
 
-No interruption was missed on the check fold in any copy; one false stop each on the phone copy. Room echo is the
-Nov 20 system's weakest condition (stops slow to p90 1.3 s); on the inspect fold, phone and noise copies each cost
-one interruption. ElevenLabs *instead of* Whisper (`my_system_eleven.py`, same rules) is not submitted: slower on clean
-audio and 1.2 points lower on average, but much better in room echo (90.2 vs 81.3), which led to the rescue below.
+No interruption was missed on the check fold in any copy; one false stop each on the phone copy, in every row. The word
+rules were first written with the dev transcripts available, so this measures robustness, not unseen-call performance;
+for unseen calls we expect the high 70s to mid 80s.
 
-**These calls are not truly unseen:** the word rules were first written (Nov 17) with all 24 dev transcripts available,
-so the table measures robustness, not unseen-call performance. The organisers' unseen checkpoint (77.0) is the better
-guide: we expect unseen calls in the high 70s.
-
-**Nov 20 changes, kept:** (B) speculative STOP on two loud words with a RESUME guard: fired 11 times in replays, always
-on a real interruption, ~300 ms earlier, never needed a RESUME; (C) dialect cues («انطر», «معليش», «لو سمحت», negation
-«مو/مب/مش» at the start, Hijazi and Kuwaiti question words), checked against 2,533 logged decodes: 2 real stops gained,
-0 new false stops; (F) slow-decode watchdog: at 3× decode time dev would fall to 27.6, with the switch 85.4.
-
-**Nov 21 change, kept: "default stop".** The top checkpoint teams had our Restraint but far higher Responsiveness (R
-0.87-0.97 vs 0.63), so we tried stopping on sustained speech unless the words prove it is a backchannel. A first version
-(1 word, 1 s, −6 dB) tied (90.1 vs 90.1) with a new false stop. We then wrote down exactly two variants and the acceptance
-rule before running them (`analysis/PREREG_default_stop_nov20.md`): ≥ 2 words failed (brown noise −5.7, a false stop);
-**≥ 1 non-backchannel word over 1 s at ≥ −3 dB vs the caller's own voice** (the line the speculative STOP already uses)
-passed: check-fold mean 90.1 → 93.0 in the deterministic replay, no set lower, no new false stop, and not one event
-scored lower on any of the 8 sets. Live real-time confirmation (check fold): dev 92.9 → 96.2, click 92.9 → 95.5, room echo
-81.3 → 85.2, 0 false stops. It catches the ambiguous «خلاص خلاص… فهمت», the overlap «إيه الأحد … زين، احجزه» in noise, and
-an echoey interruption earlier. Honest size: 4 different calls improved, none harmed; we expect +1 to +3 on new calls.
-
-**Nov 21 change, kept: ElevenLabs "rescue".** Whisper is fast but sometimes blind (stock phrases, echo); ElevenLabs is
-slower but never invents subtitle text. One variant and its rule were written before any run
-(`analysis/PREREG_hybrid_nov20.md`): ElevenLabs' text goes through the same `decide()` and may only STOP a burst
-Whisper read as empty, a stock phrase or "too little to tell". Live, check fold: mean 92.7 → 94.0, worst set −0.2 (pink
-noise), loud start +2.8, echo +4.5, no new false stop, 0 disconnects. 12 of its 13 STOPs were cues Whisper missed
-(«لحظة», «بس», «اسمع», «لأ»); one was TV news text that did no harm here but is the real risk (section 7).
-
-**Nov 21 morning, kept: rescue on cues only** (`analysis/PREREG_cue_rescue_nov21.md`, written before the run). In the
-overnight runs the full rescue again read TV news as a sentence («في الشأن المحلي، أعلنت»). The submitted version lets
-ElevenLabs stop only on a stop cue or phrase, and judges a bare «لا» only on its final text, never before a polite
-ending. It can only remove rescue STOPs, so its mean (95.1 vs 94.4 for two runs of the full rescue) is equal within
-run noise (~0.7); every rule held (worst set −0.4, same false stops on the 8 copies, team data and the polite set).
-All 14 of its STOPs were real cues («لحظة», «بس», «عفوا», «استنى», «اسمع»).
+**How each change was adopted.** For each one we wrote the variant and its acceptance rule down *before* running it
+(`analysis/PREREG_*.md`), and kept it only if the check-fold mean did not fall, no copy fell by more than 2 points, and
+there were no new false stops (also on team data and a polite-«لا» set):
+- **Speculative STOP + RESUME, dialect cues, slow-decode watchdog (Nov 20).** The speculative STOP fired 11 times in
+  replays, always on a real interruption, ~300 ms earlier; the dialect cues («انطر», «معليش», «مو/مب/مش» at the start)
+  gained 2 stops and 0 false stops on 2,533 logged decodes; the watchdog keeps 85.4 on dev when decodes are 3× slower.
+- **Default stop (Nov 21).** The top checkpoint teams had our Restraint but far higher Responsiveness (R 0.87–0.97 vs
+  0.63). Stopping on 1 s of speech at the caller's own loudness with any non-backchannel word: 89.8 → 92.7, no new
+  false stop. It catches the ambiguous «خلاص خلاص… فهمت» and the overlap «إيه الأحد … زين، احجزه» in noise.
+- **ElevenLabs rescue (Nov 21).** Whisper is fast but sometimes blind (stock phrases, echo); ElevenLabs is slower but
+  never invents subtitle text. 92.7 → 94.0 / 94.7 in two runs. But in two runs it also read TV news as a sentence
+  («في الشأن المحلي، أعلنت»), so the **submitted version lets it stop only on a cue or phrase**: equal score (95.1, within
+  run noise), and all 14 of its stops were real cues («لحظة», «بس», «عفوا», «استنى», «اسمع»).
 
 ## 5b. Tried and rejected
 
 | Idea | Result |
 |---|---|
+| ElevenLabs `scribe_v3_live` *instead of* Whisper | best text accuracy (0.90 vs 0.86) but first text ~0.75 s: 88.6 vs 89.8; much better in echo (90.2 vs 81.3), which led to the rescue |
 | Hedged STOP at 200-300 ms on any loud sound, RESUME if it is an acknowledgement | S fell to 0.73-0.80: every loud KEEP burst became a half-credit hiccup |
-| "Default stop" at −6 dB (1 word) or with ≥ 2 words (simulated) | −6 dB: tie (90.1 vs 90.1), a new false stop on 4 of 8 copies; 2 words: brown noise −5.7 with a false stop. The pre-registered −3 dB version was adopted (section 5) |
-| ElevenLabs `scribe_v3_live` as the recogniser | Best text accuracy (0.90 vs Whisper 0.86) but first text ~0.75 s; full system 88.6 vs 89.8 (above) |
-| Gemini Live as the recogniser | first text 1.82 s median, nothing on 38 of 121 events; 0 of 56 stops by 1.0 s (Whisper 25) |
 | Dialect-tuned Whisper (`oddadmix/...-arabic-dialectal-v2`) | +4 on team calls, but dev 88.8: a TV false stop, «لحظة» heard «لحفة» |
-| `int8_float16`, Whisper small, first decode at 200 ms | no faster or more errors (validation 63.0 → 37.0 / −5.2 / −9.2) |
-| Joining bursts split by a pause | validation swung +7 / −8 with the gap setting: fragile |
-| Speaker-embedding veto, pitch/voicing classifier, LLM judge, confidence gates, banning stock tokens | enrolment too short; AUC 0.54; 2-4 false stops per model; false stops are confident decodes; decoder falls back to «شكرا» |
-
-Lesson: with S = 1.00 on every seen set, "no new false stop in a replay" cannot validate a loosening, so we shipped the
-system whose Restraint we could verify.
+| Gemini Live as the recogniser | first text 1.82 s median; 0 of 56 stops by 1.0 s (Whisper 25) |
+| Speaker-embedding veto, pitch/voicing classifier, LLM judge, confidence gates | enrolment too short; AUC 0.54; 2-4 false stops per model; false stops are confident decodes |
 
 ## 6. Where it fails
 
-Dev set (24 calls), final system (`python -m ttbench.summary runs/live-final-dev --failures`: no misses, no false
-stops), plus the one false stop of the loud-start copy:
+Dev set (24 calls), final system: no misses, no false stops; the losses are latency and end of turn:
 
 | # | Call | What happened | Why it went wrong |
 |---|---|---|---|
-| 1 | GI-D02 | Stopped 0.5 s after the interruption was clear (full credit needs 0.3 s) | Latency floor: no decode before 300 ms of burst, plus ~280 ms per decode. A 200 ms first decode scored lower (short clips are misread). |
+| 1 | GI-D02 | Stopped 0.5 s after the interruption was clear (full credit needs 0.3 s) | Latency floor: no decode before 300 ms of burst, plus ~280 ms per decode; a 200 ms first decode misreads short clips. |
 | 2 | GI-D03 | «لحظة»; stopped 0.4 s after it was clear | Same floor; in earlier runs the first decode was «لحفظ», a near miss we do not loosen the match for. |
-| 3 | AM-D02 | Ambiguous word; stopped 0.5 s after it was clear | Same floor: the decision needs the words, and the words need one decode. |
-| 4 | OV-D03 | Both started at once; stopped 0.5 s after «يا أخي هذا ثالث مرة…» was clear (0.8 s before Nov 20) | «يا أخي هذا» is 2 real words; the speculative STOP cut 0.3 s, the rest is the floor. |
-| 5 | HT-D02 | End-of-turn: took the turn three times while the caller dictated («لحظة أشوف» … «ثلاثة سبعة») | Such phrases and digit strings look finished to our end-of-turn rule (separate track). |
-| 6 | HT-D01 | End-of-turn: took the turn 0.6 s after the caller finished, at the edge of full credit | «يعني تقريبا ساعة سبعة» looks complete after a pause; words alone cannot always tell a pause from an end. |
-| 7 | BG-D01 | Loud-start copy: false stop on TV speech («على المترجمات لكثير…») | The TV was louder than the caller early on and became the reference voice. Text cannot tell a TV presenter from the caller. |
+| 3 | OV-D03 | Both started at once; stopped 0.5 s after «يا أخي هذا ثالث مرة…» was clear | «يا أخي هذا» is 2 real words; the speculative STOP cut 0.3 s, the rest is the floor. |
+| 4 | HT-D02 | End of turn: took the turn three times while the caller dictated («لحظة أشوف» … «ثلاثة سبعة») | Such phrases and digit strings look finished to our end-of-turn rule. |
+| 5 | BG-D01 (loud-start copy) | False stop on TV speech («على المترجمات لكثير…») | The TV was louder than the caller early on and became the reference voice. |
 
 Unseen data (team calls, live tests):
 
 | # | Call | What happened | Why it went wrong |
 |---|---|---|---|
-| 8 | IH04_clean_phone («لا، مو صح») | Stopped 1.8 s after the intent (limit 1.5 s) | Three first decodes were the stock phrase «ترجمة نانسي قنقر». |
-| 9 | IH05_noisy-door_phone («استنى استنى») | Never stopped | Heard «سنة سنة» four times, then the stock phrase. |
-| 10 | AM02 («طيب؟») | Never stopped | The rising tone is lost in text; «طيب» reads as an acknowledgement. |
-| 11 | live, Nov 17 | «اصبر، اصبر» did not stop the agent | «اصبر» was in no dev call; added with 60 general Gulf phrases, 0 new false stops on 2,719 logged decodes. |
-| 12 | T4-BG01 (TV news) | False stop | Background speech at the caller's own loudness, decoded fluently: no text or loudness rule separates it. |
-| 13 | Polite set («لا لا إن شاء الله» = "not at all") | False stop on all 3 polite calls (5 KEEP events lost; S 0.67) | Whisper's first decode hears «لا لا» ~0.6–0.9 s in; «إن شاء الله» arrives ~1.4 s, too late for a RESUME within 500 ms. Waiting for it made real «لا» stops 0.3–0.6 s late on team data (71.0 → 66.4), so we keep the stop; the rescue never adds one. |
+| 6 | IH04 phone («لا، مو صح») | Stopped 1.8 s after the intent (limit 1.5 s) | Three first decodes were the stock phrase «ترجمة نانسي قنقر». |
+| 7 | IH05 noisy door, phone («استنى استنى») | Never stopped | Heard «سنة سنة» four times, then the stock phrase. |
+| 8 | AM02 («طيب؟») | Never stopped | The rising tone is lost in text; «طيب» reads as an acknowledgement. |
+| 9 | live, Nov 17 | «اصبر، اصبر» did not stop the agent | «اصبر» was in no dev call; added with 60 general Gulf phrases, 0 new false stops on 2,719 logged decodes. |
+| 10 | T4-BG01 (TV news) | False stop | Background speech at the caller's own loudness, decoded fluently: no text or loudness rule separates it. |
+| 11 | Polite «لا لا إن شاء الله» ("not at all") | False stop on all 3 polite calls (S 0.67) | Whisper hears «لا لا» ~0.7 s in; «إن شاء الله» arrives ~1.4 s, too late for a RESUME. Waiting for it made real «لا» stops 0.3–0.6 s late (team data 71.0 → 66.4), so we keep the stop. |
 
 ## 7. Strengths, weaknesses and trade-offs
 
-**Strong:** backchannels, coughs, laughter and echo; clear Gulf cues within ~0.2–0.5 s; quiet or loud callers; still
-works without internet (rescue off). **Weak:** speech from a TV or person as loud as the caller; words whose meaning is in the tone («خلاص», «طيب»);
-interruptions without a cue need 3 real words; noisy phone lines; room echo; end of turn during dictation. The rescue reads background TV more clearly than
-Whisper; limiting it to cues removes the sentence case, but a TV saying «لحظة» could still stop us; it needs internet at the venue (without it: the Whisper system).
+**Strong:** backchannels, coughs, laughter and echo; clear Gulf cues within ~0.2–0.5 s; quiet or loud callers; works
+without internet (rescue off). **Weak:** a TV or person as loud as the caller; words whose meaning is in the tone
+(«خلاص», «طيب»); interruptions without a cue need 3 real words; noisy phone lines; end of turn during dictation. The
+rescue needs internet at the venue, and a TV saying «لحظة» could still stop us.
 **Trade-off:** we prefer a late stop over a false stop (a false stop zeroes a KEEP event). The 3-word rule and the −6 dB
 line were partly chosen while looking at dev; the −12 dB line has a 10 dB margin.
 
 **With another week:** a fast keyword spotter for the first 300 ms (latency and first-decode errors are the biggest
-remaining loss); a question-context gate (the
-agent just asked «؟»), which needs more answer-to-question data to validate.
+remaining loss); a question-context gate (the agent just asked «؟»), which needs more answer-to-question data.
 
 ## 8. External services, models and data
 
@@ -192,16 +156,14 @@ cuDNN 12, and **ElevenLabs `scribe_v3_live`** (cloud, caller audio only, rescue 
 | Kind | Name | Status |
 |---|---|---|
 | Model | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | **scored system** (local, GPU) |
-| Model | Silero VAD (bundled in faster-whisper, CPU) | offline analysis only |
-| Model | `Systran/faster-whisper-small`; `oddadmix/whisper-large-v3-turbo-arabic-dialectal-v2` (Apache 2.0) | tested, not used |
 | API | ElevenLabs `scribe_v3_live` (speech-to-text, streamed) | **scored system** (rescue STOPs) and demo |
-| API | ElevenLabs: `scribe_v1` (speech-to-text); `eleven_v4_turbo`, `eleven_flash_v2_5` (text-to-speech) | demo and experiments only |
-| API | Google AI Studio Gemini Live: `gemini-2.5-flash-native-audio-latest` | experiment only |
-| API | Munsit (CNTXT AI): `faseeh-v1-preview` text-to-speech, `audio/transcribe` | demo / comparison only |
-| API | OpenRouter: `anthropic/claude-haiku-5.5` (demo writer, LLM judge test), `google/gemini-2.5-flash-lite`, `google/gemini-2.5-flash`, `google/gemini-3.7-flash`, `openai/gpt-audio-mini`, `meta-llama/llama-3.3-70b-instruct`, `openai/gpt-4.1-mini`, `qwen/qwen3.8-omni-flash`, `mistralai/voxtral-small-24b-2507` | demo and experiments only |
-| Library / tool | `edge-tts` (rejected demo voice); Cloudflare `cloudflared` (practice checkpoint only) | not in the scored system |
-| Data | Sarj development set (24 calls) and our label-safe copies (volume, loud start, click, phone, noise, echo) | development and robustness tests |
-| Data | Our team's generated calls (58 + 38; ElevenLabs agent voices, recorded caller lines) | held-out tests, never used to set numbers; no private or customer data |
+| Model | `Systran/faster-whisper-small`; `oddadmix/whisper-large-v3-turbo-arabic-dialectal-v2`; Silero VAD | tested / analysis only |
+| API | ElevenLabs `scribe_v1`, `eleven_v4_turbo`, `eleven_flash_v2_5`; Munsit `faseeh-v1-preview` | demo and experiments only |
+| API | Google Gemini Live `gemini-2.5-flash-native-audio-latest` | experiment only |
+| API | OpenRouter: `anthropic/claude-haiku-5.5`, `google/gemini-2.5-flash(-lite)`, `google/gemini-3.7-flash`, `openai/gpt-audio-mini`, `openai/gpt-4.1-mini`, `meta-llama/llama-3.3-70b-instruct`, `qwen/qwen3.8-omni-flash`, `mistralai/voxtral-small-24b-2507` | demo and experiments only |
+| Tool | `edge-tts` (rejected demo voice); Cloudflare `cloudflared` (practice checkpoint only) | not in the scored system |
+| Data | Sarj development set (24 calls) and our label-safe copies | development and robustness tests |
+| Data | Our team's generated calls (58 + 38; ElevenLabs agent voices, recorded caller lines) | held-out tests only; no private or customer data |
 
 ## 9. Team
 
