@@ -27,6 +27,7 @@ from ttbench.score import aggregate, load_labels, score
 SETS = {"dev": "data/dev", "vol-12": "data/aug/vol-12", "loudstart+8": "data/aug/loudstart+8", "click": "data/aug/click",
         "phone": "data/aug/phone", "noise-pink15": "data/aug/noise-pink15", "noise-brown5": "data/aug/noise-brown5",
         "reverb": "data/aug/reverb"}
+EXTRA = {"polite": "data/polite", "val": "data/split_val", "train": "data/split_train"}   # run only, not in the fold table
 FOLDS = {"inspect": lambda sid: sid.endswith("-D01"), "check": lambda sid: not sid.endswith("-D01"),
          "all": lambda sid: True}
 
@@ -39,9 +40,10 @@ def cmd_run(a):
     sets = a.sets.split(",") if a.sets else list(SETS)
     for s in sets:
         name = run_name(a.tag, s)
-        print(f"=== {name} ({SETS[s]})", flush=True)
+        data = SETS.get(s) or EXTRA[s]
+        print(f"=== {name} ({data})", flush=True)
         r = subprocess.run([sys.executable, "-m", "ttbench.play", "--system", a.system, "--calls", "all",
-                            "--data", SETS[s], "--name", name], capture_output=True, text=True, encoding="utf-8",
+                            "--data", data, "--name", name], capture_output=True, text=True, encoding="utf-8",
                            errors="replace")
         tail = [l for l in r.stdout.splitlines() if "Core" in l or "core" in l][-2:]
         print("\n".join(tail) or r.stdout[-400:], flush=True)

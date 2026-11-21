@@ -9,12 +9,12 @@ An adaptive energy detector notices caller sound while the agent talks. A local 
 GPU) re-reads that burst every ~300 ms, and Arabic rules decide: a floor bid («لحظة», «لا لا», «اصبر», «ماني فاهم», a
 question, a real sentence) means STOP; a backchannel («إيه», «تمام»), an echo of the agent, side talk, TV or noise means
 keep talking. Loudness is judged *relative to this caller*, so a soft speaker is not mistaken for background noise.
-A second, cloud recogniser (ElevenLabs live) listens in parallel and may only *add* a STOP where Whisper heard nothing
-useful ("rescue").
+A second, cloud recogniser (ElevenLabs live) listens in parallel and may only *add* a STOP, only on a stop cue,
+where Whisper heard nothing useful ("rescue").
 
-**Scored code** (`my_system_hybrid.py` = `my_system.py` + rescue, `turn_rules.py`): the Nov 20 changes (speculative
+**Scored code** (`my_system_hybrid_cue.py` = `my_system.py` + cue-only rescue, `turn_rules.py`): the Nov 20 changes (speculative
 STOP + RESUME, dialect cues, slow-decode watchdog), the Nov 21 "default stop" and the ElevenLabs rescue (section 5),
-each measured before it was adopted. Run: `python my_system_hybrid.py`.
+each measured before it was adopted. Run: `python my_system_hybrid_cue.py`.
 
 ## 2. Why this approach
 
@@ -41,8 +41,9 @@ caller audio, 20 ms frames (agent TEXT used for echo detection)
  │     STOP:  a question, or 3+ real words, unless more than 6 dB quieter than the caller's voice
  │     STOP?: 2 real words at the caller's own loudness = speculative STOP; RESUME if not confirmed within 450 ms
  │     STOP:  "default stop": 1 s of speech as loud as the caller's own voice with any non-backchannel word
- ├─ rescue: ElevenLabs live text of the same burst → same decide(); may STOP only if Whisper's own reading was
- │          empty, a stock phrase or "too little to tell" (it can never overrule Whisper's echo/side-talk/quiet vetoes)
+ ├─ rescue: ElevenLabs live text of the same burst → same decide(); may STOP only on a stop cue/phrase, and only if
+ │          Whisper's own reading was empty, a stock phrase or "too little to tell" (never overrules Whisper's vetoes);
+ │          a bare «لا» waits for the burst's final text and never stops before a polite ending («لا لا إن شاء الله»)
  └─ end of turn: caller quiet 300 ms → Whisper reads their last 4 s → unfinished? wait up to 1.6 s, else 0.7 s
 Fallback: Whisper fails 3 times, or decodes get slow (median > 600 ms): loudness-only rule, Whisper retried in background.
 No internet / ElevenLabs down: no rescue, the Whisper system exactly (it never waits for the cloud).
@@ -86,7 +87,8 @@ telephone band 300–3400 Hz + G.711, pink noise at 15 dB SNR, car-like brown no
 | Whisper, Nov 20 rules (live) | 92.9 | 91.1 | 89.6 | 92.9 | 89.0 | 88.4 | 93.5 | 81.3 | **89.8** |
 | Whisper + default stop, simulated | 96.8 | 94.4 | 89.9 | 96.8 | 91.5 | 92.5 | 94.4 | 87.2 | **93.0** |
 | Whisper + default stop (live) | 96.2 | 94.6 | 89.7 | 95.5 | 93.2 | 93.7 | 93.6 | 85.2 | **92.7** |
-| **+ ElevenLabs rescue (submitted, live)** | 96.3 | 94.6 | 92.5 | 96.5 | 94.5 | 93.5 | 94.9 | 89.7 | **94.0** |
+| + ElevenLabs rescue (live, 2 runs) | 96.9 | 95.5 | 92.8 | 97.0 | 94.2 | 93.8 | 94.9 | 90.3 | **94.4** |
+| **+ rescue on cues only (submitted, live)** | 97.5 | 96.3 | 93.0 | 97.4 | 93.8 | 97.0 | 95.0 | 90.5 | **95.1** |
 | ElevenLabs live (experiment) | 88.9 | 89.8 | 89.3 | 89.1 | 88.4 | 85.3 | 87.6 | 90.2 | **88.6** |
 
 No interruption was missed on the check fold in any copy; one false stop each on the phone copy. Room echo is the
@@ -119,6 +121,13 @@ slower but never invents subtitle text. One variant and its rule were written be
 Whisper read as empty, a stock phrase or "too little to tell". Live, check fold: mean 92.7 → 94.0, worst set −0.2 (pink
 noise), loud start +2.8, echo +4.5, no new false stop, 0 disconnects. 12 of its 13 STOPs were cues Whisper missed
 («لحظة», «بس», «اسمع», «لأ»); one was TV news text that did no harm here but is the real risk (section 7).
+
+**Nov 21 morning, kept: rescue on cues only** (`analysis/PREREG_cue_rescue_nov21.md`, written before the run). In the
+overnight runs the full rescue again read TV news as a sentence («في الشأن المحلي، أعلنت»). The submitted version lets
+ElevenLabs stop only on a stop cue or phrase, and judges a bare «لا» only on its final text, never before a polite
+ending. It can only remove rescue STOPs, so its mean (95.1 vs 94.4 for two runs of the full rescue) is equal within
+run noise (~0.7); every rule held (worst set −0.4, same false stops on the 8 copies, team data and the polite set).
+All 14 of its STOPs were real cues («لحظة», «بس», «عفوا», «استنى», «اسمع»).
 
 ## 5b. Tried and rejected
 
@@ -160,13 +169,14 @@ Unseen data (team calls, live tests):
 | 10 | AM02 («طيب؟») | Never stopped | The rising tone is lost in text; «طيب» reads as an acknowledgement. |
 | 11 | live, Nov 17 | «اصبر، اصبر» did not stop the agent | «اصبر» was in no dev call; added with 60 general Gulf phrases, 0 new false stops on 2,719 logged decodes. |
 | 12 | T4-BG01 (TV news) | False stop | Background speech at the caller's own loudness, decoded fluently: no text or loudness rule separates it. |
+| 13 | Polite set («لا لا إن شاء الله» = "not at all") | False stop on all 3 polite calls (5 KEEP events lost; S 0.67) | Whisper's first decode hears «لا لا» ~0.6–0.9 s in; «إن شاء الله» arrives ~1.4 s, too late for a RESUME within 500 ms. Waiting for it made real «لا» stops 0.3–0.6 s late on team data (71.0 → 66.4), so we keep the stop; the rescue never adds one. |
 
 ## 7. Strengths, weaknesses and trade-offs
 
 **Strong:** backchannels, coughs, laughter and echo; clear Gulf cues within ~0.2–0.5 s; quiet or loud callers; still
 works without internet (rescue off). **Weak:** speech from a TV or person as loud as the caller; words whose meaning is in the tone («خلاص», «طيب»);
 interruptions without a cue need 3 real words; noisy phone lines; room echo; end of turn during dictation. The rescue reads background TV more clearly than
-Whisper, so it could add a false stop on a TV call; it needs internet at the venue (without it: the Whisper system).
+Whisper; limiting it to cues removes the sentence case, but a TV saying «لحظة» could still stop us; it needs internet at the venue (without it: the Whisper system).
 **Trade-off:** we prefer a late stop over a false stop (a false stop zeroes a KEEP event). The 3-word rule and the −6 dB
 line were partly chosen while looking at dev; the −12 dB line has a 10 dB margin.
 

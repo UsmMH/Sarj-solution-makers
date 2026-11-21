@@ -9,7 +9,7 @@ Nov 19 (Day 5). Code freeze and final submission: **Saturday Nov 21, 12:00** (mo
 - Final ranking = 80 % Core score on a **hidden Arabic stream (Day 6, Nov 20)** + 20 % judges (originality 10, practical applicability 5, clarity of demo 5). Day 6 also has an unscored live-microphone demo the judges watch.
 - Deadlines: **code freeze AND final submission Saturday Nov 21, 12:00** (moved from Nov 19/20; `python -m ttbench.ready` prints commit hash + service list). The connection check is most likely not happening (user, Nov 18): don't plan around it, but still test the system on the venue network before the final.
 - The Day 3 checkpoint did not happen as a test; mentors gave advice instead: no new data recording (augment the 24 calls), cloud APIs are allowed (they count in latency, must be declared).
-- Team name constant in `my_system.py` AND `my_system_hybrid.py` must stay: `TEAM = "Team 4"` (changed from "Team 4 (for now :D)" on Nov 20). Also keep `PEAK_DB = -20.0`.
+- Team name constant in `my_system.py`, `my_system_hybrid.py` AND `my_system_hybrid_cue.py` must stay: `TEAM = "Team 4"` (changed from "Team 4 (for now :D)" on Nov 20). Also keep `PEAK_DB = -20.0`.
 - Cost-conscious with OpenRouter: good models, but watch the price (key limit $1; ~$0.05 used by Nov 18).
 
 ## Repo layout (this folder = the git repo, branch `main`)
@@ -239,3 +239,9 @@ python -m ttbench.play --url ws://127.0.0.1:8765 --calls all --data data/aug/vol
   `python my_system_hybrid.py --host 0.0.0.0`; check with `python -m ttbench.ready --system my_system_hybrid.py`.
 - Needs internet + `ELEVENLABS_API_KEY` in `.env`; without them it is exactly `my_system.py`. Confirm internet at the table.
 - Live check fold 92.7 -> 94.0 (analysis/PREREG_hybrid_nov20.md). Freeze: Sat Nov 21, 3:00 PM.
+
+## NOV 21 MORNING: HAND-IN = CUE-ONLY HYBRID (supersedes the section above)
+- `my_system_hybrid_cue.py` = the hybrid, but ElevenLabs may rescue only on a stop cue/phrase; a bare «لا» only on its
+  final text and never before a polite ending. Passed `analysis/PREREG_cue_rescue_nov21.md`: check mean 95.1 vs hybrid
+  94.0/94.7, same false stops on 8 sets, team data and polite. Run: `python my_system_hybrid_cue.py --host 0.0.0.0`;
+  check: `python -m ttbench.ready --system my_system_hybrid_cue.py`. Freeze Sat Nov 21, 3:00 PM.
