@@ -123,7 +123,7 @@ Dev set (24 calls), final system: no misses, no false stops; the losses are late
 | 2 | GI-D03 | «لحظة»; stopped 0.4 s after it was clear | Same floor; in earlier runs the first decode was «لحفظ», a near miss we do not loosen the match for. |
 | 3 | OV-D03 | Both started at once; stopped 0.5 s after «يا أخي هذا ثالث مرة…» was clear | «يا أخي هذا» is 2 real words; the speculative STOP cut 0.3 s, the rest is the floor. |
 | 4 | HT-D02 | End of turn: took the turn three times while the caller dictated («لحظة أشوف» … «ثلاثة سبعة») | Such phrases and digit strings look finished to our end-of-turn rule. |
-| 5 | BG-D01 (loud-start copy) | False stop on TV speech («على المترجمات لكثير…») | The TV was louder than the caller early on and became the reference voice. |
+| 5 | BG-D01 | Loud-start copy: false stop on TV speech («على المترجمات لكثير…») | The TV was louder than the caller early on and became the reference voice. |
 
 Unseen data (team calls, live tests):
 
