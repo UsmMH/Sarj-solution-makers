@@ -13,7 +13,7 @@ A second, cloud recogniser (ElevenLabs live) listens in parallel and may only *a
 where Whisper heard nothing useful ("rescue").
 
 **Scored code** (`my_system_hybrid_cue.py` = `my_system.py` + cue-only rescue, `turn_rules.py`): the Nov 20 changes (speculative
-STOP + RESUME, dialect cues, slow-decode watchdog), the Nov 21 "default stop" and the ElevenLabs rescue (section 5),
+STOP + RESUME, dialect cues, slow-decode watchdog), the Nov 21 "default stop" and the cue-only ElevenLabs rescue (section 5),
 each measured before it was adopted. Run: `python my_system_hybrid_cue.py`.
 
 ## 2. Why this approach
@@ -56,7 +56,7 @@ judged, reset per call. A live browser demo (`demo.py`) runs the same system on 
 
 | | |
 |---|---|
-| Stop latency, dev (real time) | median 334 ms after the intent was evident, p90 524 ms (Whisper alone 476 / 525) |
+| Stop latency, dev (real time) | median 325 ms after the intent was evident, p90 514 ms (Whisper alone 476 / 525) |
 | Where the time goes | 300 ms of burst before the first decode + ~280 ms decode + up to 100 ms for the next slot |
 | Hardware | RTX 3060 Laptop GPU (6 GB), ~2.4 GB used, mains power (battery: decodes ~35 % slower); ~809 M parameters |
 | Cloud calls and cost | ElevenLabs `scribe_v3_live`, caller channel streamed (~165 credits per 10 min of audio); its text reaches the rules ~0.7 s after speech, so it only adds stops Whisper missed, never makes ours faster |
